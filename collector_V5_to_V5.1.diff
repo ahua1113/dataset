@@ -1,0 +1,615 @@
+--- collector.py (V5)
++++ collector.py (V5.1)
+@@ -1,8 +1,8 @@
+ #!/usr/bin/env python3
+ """
+-Chemistry Source Collector V5.
+-
+-V5 changes paper discovery from fallback routing to balanced multi-source
++Chemistry Source Collector V5.1.
++
++V5.1 fixes OpenAlex journal filtering and strengthens balanced multi-source
+ round-robin scheduling. A source that returns HTTP 429 is disabled only for
+ the current run. Existing raw files and manifest records are preserved.
+ 
+@@ -44,6 +44,7 @@
+ 
+ ARXIV_API = "https://export.arxiv.org/api/query"
+ OPENALEX_API = "https://api.openalex.org/works"
++OPENALEX_SOURCES_API = "https://api.openalex.org/sources"
+ EPA_INDEX = "https://www.epa.gov/hw-sw846/sw-846-compendium"
+ 
+ CATEGORIES = {"papers", "videos", "teaching", "methods", "textbooks"}
+@@ -140,6 +141,12 @@
+ 
+ 
+ class SourceTemporarilyUnavailable(RuntimeError):
++    """The source is temporarily unavailable, typically due to HTTP 429."""
++    pass
++
++
++class SourceQueryFailed(RuntimeError):
++    """The source endpoint rejected or could not satisfy the query."""
+     pass
+ 
+ 
+@@ -218,6 +225,7 @@
+         self.respect_robots = respect_robots
+         self.robots: dict[str, RobotFileParser] = {}
+         self.last_hit: dict[str, float] = {}
++        self.openalex_source_cache: dict[str, dict] = {}
+ 
+     def _throttle(self, host: str, gap: float) -> None:
+         delta = time.monotonic() - self.last_hit.get(host, 0.0)
+@@ -255,34 +263,43 @@
+         host = urlparse(url).netloc.lower()
+ 
+         if api_name:
+-            self._throttle(host, 2.0)
++            # API discovery must fail fast. In particular, do not sleep for
++            # long periods after HTTP 429: the scheduler can pause only the
++            # affected source and continue with the others.
++            self._throttle(host, 1.0)
+             for attempt in range(2):
+                 try:
+                     response = self.session.get(
+-                        url, timeout=(15, 60), stream=stream
++                        url, timeout=(12, 45), stream=stream
+                     )
+-                except requests.RequestException:
++                except requests.RequestException as exc:
+                     if attempt == 0:
+                         print(
+-                            f"[WARN] {api_name} connection error; retry once in 2s.",
++                            f"[WARN] {api_name} connection error; retry once in 1s.",
+                             flush=True,
+                         )
+-                        time.sleep(2)
+-                        continue
+-                    raise
+-                if response.status_code == 429:
+-                    if attempt == 0:
+-                        print(
+-                            f"[WARN] {api_name} HTTP 429; retry once in 2s.",
+-                            flush=True,
+-                        )
+-                        time.sleep(2)
++                        time.sleep(1)
+                         continue
+                     raise SourceTemporarilyUnavailable(
+-                        f"{api_name} HTTP 429 after short retry"
++                        f"{api_name} connection failure: {exc}"
++                    ) from exc
++
++                if response.status_code == 429:
++                    response.close()
++                    raise SourceTemporarilyUnavailable(
++                        f"{api_name} HTTP 429; no long retry in this run"
+                     )
++
++                if 400 <= response.status_code < 500:
++                    body = response.text[:240].replace("\n", " ")
++                    response.close()
++                    raise SourceQueryFailed(
++                        f"{api_name} HTTP {response.status_code}: {body}"
++                    )
++
+                 response.raise_for_status()
+                 return response
++
+             raise SourceTemporarilyUnavailable(f"{api_name} unavailable")
+ 
+         if not self.robots_allowed(url):
+@@ -414,16 +431,97 @@
+ 
+ 
+ def publisher_is_chemistry(work: dict, journal: dict) -> tuple[bool, str]:
+-    text = f'{work.get("title", "")} {reconstruct_abstract(work)}'
++    title = work.get("title", "") or ""
++    abstract = reconstruct_abstract(work)
++    topic_text = openalex_topic_text(work)
++    text = f"{title} {abstract} {topic_text}"
++
+     if journal["scope"] == "chemistry_core":
+-        return True, f'ISSN-verified chemistry journal: {journal["name"]}'
++        return True, (
++            f'ISSN-verified chemistry journal: {journal["name"]}'
++        )
++
+     hits = CHEMISTRY_SIGNAL.findall(text)
+     if hits:
+         return True, (
+             f'broad journal {journal["name"]} + chemistry metadata signal '
+             f"({len(hits)} match(es))"
+         )
+-    return False, f'broad journal {journal["name"]} without chemistry signal'
++
++    return False, (
++        f'broad journal {journal["name"]} without chemistry signal '
++        "in title/abstract/OpenAlex topic metadata"
++    )
++
++
++def openalex_resolve_source(
++    client: Client,
++    issn: str,
++    journal_name: str,
++) -> dict:
++    """
++    Resolve a journal ISSN to its OpenAlex Source entity.
++
++    Important: ISSN is a valid identifier for the /sources endpoint, but
++    primary_location.source.issn is not a supported Works filter. The
++    correct two-step route is ISSN -> Source ID -> Works filter by
++    primary_location.source.id.
++    """
++    issn = (issn or "").strip()
++    if not issn:
++        raise SourceQueryFailed(
++            f"{journal_name}: empty ISSN in PAPER_SOURCES"
++        )
++
++    cached = client.openalex_source_cache.get(issn)
++    if cached:
++        return cached
++
++    url = f"{OPENALEX_SOURCES_API}/issn:{issn}"
++    try:
++        data = client.json(url, "OpenAlex Sources")
++    except SourceTemporarilyUnavailable:
++        raise
++    except (SourceQueryFailed, requests.RequestException, ValueError) as exc:
++        raise SourceQueryFailed(
++            f"{journal_name} ISSN {issn} source lookup failed: {exc}"
++        ) from exc
++
++    source_id = str(data.get("id") or "").rstrip("/").split("/")[-1]
++    if not source_id.startswith("S"):
++        raise SourceQueryFailed(
++            f"{journal_name} ISSN {issn}: OpenAlex returned no valid Source ID"
++        )
++
++    resolved = {
++        "id": source_id,
++        "display_name": data.get("display_name") or journal_name,
++        "issn": data.get("issn") or [],
++        "issn_l": data.get("issn_l") or "",
++        "type": data.get("type") or "",
++        "is_oa": bool(data.get("is_oa")),
++    }
++    client.openalex_source_cache[issn] = resolved
++
++    print(
++        f"[OpenAlex] {journal_name} ISSN={issn} -> source_id={source_id}",
++        flush=True,
++    )
++    return resolved
++
++
++def openalex_topic_text(work: dict) -> str:
++    parts = []
++
++    primary_topic = work.get("primary_topic")
++    if primary_topic:
++        parts.append(json.dumps(primary_topic, ensure_ascii=False))
++
++    topics = work.get("topics") or []
++    if topics:
++        parts.append(json.dumps(topics, ensure_ascii=False))
++
++    return " ".join(parts)
+ 
+ 
+ def openalex_source_candidates(
+@@ -431,12 +529,37 @@
+     source_group: str,
+     per_journal: int = 60,
+ ) -> Iterable[dict]:
++    """
++    Discover OA PDF works from a configured journal family.
++
++    Each journal is independently resolved and queried. A bad query for one
++    journal does not make the entire source group look "exhausted".
++    If OpenAlex is rate-limited (429), the whole source group is paused for
++    the current run because repeated calls would only make the situation worse.
++    """
+     cfg = PAPER_SOURCES[source_group]
++    successful_queries = 0
++    failed_queries = 0
+ 
+     for name, issn, journal_url, scope in cfg["journals"]:
++        try:
++            source = openalex_resolve_source(client, issn, name)
++        except SourceTemporarilyUnavailable:
++            raise
++        except SourceQueryFailed as exc:
++            failed_queries += 1
++            print(
++                f"[WARN] OpenAlex source lookup failed for {name}: {exc}; "
++                "trying the next configured journal.",
++                flush=True,
++            )
++            continue
++
++        source_id = source["id"]
++
+         params = {
+             "filter": (
+-                f"primary_location.source.issn:{issn},"
++                f"primary_location.source.id:{source_id},"
+                 "open_access.is_oa:true,has_content.pdf:true,type:article"
+             ),
+             "per_page": min(100, max(10, per_journal)),
+@@ -444,7 +567,7 @@
+             "select": (
+                 "id,doi,title,publication_date,type,open_access,"
+                 "best_oa_location,locations,abstract_inverted_index,"
+-                "primary_location"
++                "primary_location,primary_topic,topics"
+             ),
+         }
+         if scope == "chemistry_broad":
+@@ -453,16 +576,34 @@
+         url = OPENALEX_API + "?" + urlencode(params)
+ 
+         try:
+-            data = client.json(url, "OpenAlex")
+-        except Exception as exc:
++            data = client.json(url, "OpenAlex Works")
++        except SourceTemporarilyUnavailable:
++            raise
++        except SourceQueryFailed as exc:
++            failed_queries += 1
+             print(
+-                f'[WARN] OpenAlex unavailable for {name}: {exc}; '
+-                "continuing with other journals/sources.",
++                f"[WARN] OpenAlex works query failed for {name}: {exc}; "
++                "trying the next configured journal.",
+                 flush=True,
+             )
+             continue
+-
+-        for work in data.get("results", []):
++        except (requests.RequestException, ValueError) as exc:
++            failed_queries += 1
++            print(
++                f"[WARN] OpenAlex works response invalid for {name}: {exc}; "
++                "trying the next configured journal.",
++                flush=True,
++            )
++            continue
++
++        successful_queries += 1
++        results = data.get("results", [])
++        print(
++            f"[OpenAlex] {name}: {len(results)} OA/PDF article candidates",
++            flush=True,
++        )
++
++        for work in results:
+             journal = {
+                 "name": name,
+                 "issn": issn,
+@@ -507,7 +648,9 @@
+                 "primary_category": "",
+                 "abstract": reconstruct_abstract(work),
+                 "arxiv_id": "",
+-                "search_query": f"OpenAlex ISSN {issn}",
++                "search_query": (
++                    f"OpenAlex primary_location.source.id:{source_id}"
++                ),
+                 "oa_status": oa.get("oa_status", ""),
+                 "oa_verified": bool(oa.get("is_oa")) and bool(pdf),
+                 "oa_pdf_source": "OpenAlex best_oa_location.pdf_url",
+@@ -516,13 +659,19 @@
+                     + ("+license_metadata" if license_name else "")
+                 ),
+                 "openalex_id": work.get("id", ""),
++                "openalex_source_id": source_id,
+                 "discipline": "Chemistry",
+                 "discipline_evidence": evidence,
+                 "discipline_verification_level": (
+-                    "journal_scope+metadata+oa_pdf"
++                    "issn->openalex_source_id+journal_scope+metadata+oa_pdf"
+                 ),
+                 "source_group": source_group,
+             }
++
++    if successful_queries == 0 and failed_queries > 0:
++        raise SourceQueryFailed(
++            f"{source_group}: all configured OpenAlex journal queries failed"
++        )
+ 
+ 
+ def paper_identity_keys(item: dict) -> list[str]:
+@@ -694,6 +843,39 @@
+     return result
+ 
+ 
++def redistribute_quota(
++    quotas: Counter,
++    sources: list[str],
++    unavailable_source: str,
++    unused: int,
++    disabled: set[str],
++    exhausted: set[str],
++) -> None:
++    if unused <= 0:
++        return
++
++    receivers = [
++        s for s in sources
++        if s != unavailable_source
++        and s not in disabled
++        and s not in exhausted
++    ]
++    if not receivers:
++        return
++
++    # Give one slot at a time to the source with the smallest current
++    # remaining quota. This keeps redistribution as balanced as possible.
++    for _ in range(unused):
++        receiver = min(
++            receivers,
++            key=lambda s: (
++                quotas[s],
++                sources.index(s),
++            ),
++        )
++        quotas[receiver] += 1
++
++
+ def balanced_paper_candidates(
+     client: Client,
+     sources: list[str],
+@@ -702,12 +884,13 @@
+     dedup_keys: set[str],
+ ) -> Iterable[dict]:
+     """
+-    Balanced round-robin scheduler with dynamic redistribution.
+-
+-    - Normal operation: sources are visited in round-robin order.
+-    - A duplicate does not consume a source quota.
+-    - If a source is exhausted or rate-limited, only that source is removed.
+-    - Its unused quota is redistributed among remaining sources.
++    True round-robin paper scheduler with global deduplication.
++
++    - Sources take turns instead of repeatedly favoring the first source.
++    - Duplicates do not consume quota.
++    - Only the affected source is disabled on a temporary/API failure.
++    - Unused quota is redistributed among the remaining sources.
++    - HTTP 400 is reported as a query failure, not as "source exhausted".
+     """
+     iterators = {}
+ 
+@@ -729,6 +912,7 @@
+     disabled = set()
+     exhausted = set()
+     emitted = 0
++    cursor = 0
+ 
+     print(
+         "[papers] initial balanced quotas: "
+@@ -746,126 +930,101 @@
+         if not active:
+             break
+ 
+-        progressed = False
+-
+-        # Visit the source with the largest remaining quota first, but rotate
+-        # among equal/near-equal sources to avoid systematic source preference.
+-        active.sort(
+-            key=lambda s: (
+-                -(quotas[s] - counts[s]),
+-                sources.index(s),
+-            )
+-        )
+-
+-        for source in active:
+-            if emitted >= total_needed:
++        # Strictly rotate through the configured source order. Duplicates
++        # therefore cannot cause arXiv to monopolize discovery.
++        chosen = None
++        for step in range(len(sources)):
++            idx = (cursor + step) % len(sources)
++            source = sources[idx]
++            if source in active:
++                chosen = source
++                cursor = (idx + 1) % len(sources)
+                 break
+-            if source in disabled or source in exhausted:
+-                continue
+-            if counts[source] >= quotas[source]:
+-                continue
+-
+-            try:
+-                item = next(iterators[source])
+-            except StopIteration:
+-                unused = quotas[source] - counts[source]
+-                exhausted.add(source)
+-                quotas[source] = counts[source]
+-                print(
+-                    f"[papers] source exhausted: {source}; "
+-                    f"redistributing unused quota={unused}.",
+-                    flush=True,
+-                )
+-                # Redistribute the unused quota equally to remaining active sources.
+-                remaining_sources = [
+-                    s for s in sources
+-                    if s not in disabled
+-                    and s not in exhausted
+-                ]
+-                for i in range(unused):
+-                    if not remaining_sources:
+-                        break
+-                    receiver = remaining_sources[i % len(remaining_sources)]
+-                    quotas[receiver] += 1
+-                continue
+-            except SourceTemporarilyUnavailable as exc:
+-                unused = quotas[source] - counts[source]
+-                disabled.add(source)
+-                quotas[source] = counts[source]
+-                print(
+-                    f"[WARN] {source} temporarily unavailable: {exc}. "
+-                    f"Pausing only this source; redistributing quota={unused}.",
+-                    flush=True,
+-                )
+-                remaining_sources = [
+-                    s for s in sources
+-                    if s not in disabled
+-                    and s not in exhausted
+-                ]
+-                for i in range(unused):
+-                    if not remaining_sources:
+-                        break
+-                    receiver = remaining_sources[i % len(remaining_sources)]
+-                    quotas[receiver] += 1
+-                continue
+-            except Exception as exc:
+-                unused = quotas[source] - counts[source]
+-                disabled.add(source)
+-                quotas[source] = counts[source]
+-                print(
+-                    f"[WARN] {source} discovery error: {exc}. "
+-                    f"Pausing only this source; redistributing quota={unused}.",
+-                    flush=True,
+-                )
+-                remaining_sources = [
+-                    s for s in sources
+-                    if s not in disabled
+-                    and s not in exhausted
+-                ]
+-                for i in range(unused):
+-                    if not remaining_sources:
+-                        break
+-                    receiver = remaining_sources[i % len(remaining_sources)]
+-                    quotas[receiver] += 1
+-                continue
+-
+-            progressed = True
+-            keys = paper_identity_keys(item)
+-            duplicate_key = next(
+-                (key for key in keys if key in dedup_keys),
+-                None,
+-            )
+-            if duplicate_key:
+-                print(
+-                    f'[DUP] {source}: {item.get("title", "")[:90]} '
+-                    f'| {duplicate_key}',
+-                    flush=True,
+-                )
+-                continue
+-
+-            dedup_keys.update(keys)
+-            counts[source] += 1
+-            emitted += 1
+-            yield item
+-
+-        if not progressed:
+-            # All remaining candidates may be duplicates or all sources are
+-            # disabled/exhausted. A subsequent iteration can still continue
+-            # unless there is genuinely no active source.
+-            active_after = [
+-                s for s in sources
+-                if s not in disabled
+-                and s not in exhausted
+-                and quotas[s] > counts[s]
+-            ]
+-            if not active_after:
+-                break
++
++        if chosen is None:
++            break
++
++        source = chosen
++
++        try:
++            item = next(iterators[source])
++        except StopIteration:
++            unused = quotas[source] - counts[source]
++            exhausted.add(source)
++            quotas[source] = counts[source]
++            print(
++                f"[papers] source exhausted: {source}; "
++                f"redistributing unused quota={unused}.",
++                flush=True,
++            )
++            redistribute_quota(
++                quotas, sources, source, unused, disabled, exhausted
++            )
++            continue
++        except SourceTemporarilyUnavailable as exc:
++            unused = quotas[source] - counts[source]
++            disabled.add(source)
++            quotas[source] = counts[source]
++            print(
++                f"[WARN] {source} temporarily unavailable: {exc}. "
++                f"Pausing only this source; redistributing quota={unused}.",
++                flush=True,
++            )
++            redistribute_quota(
++                quotas, sources, source, unused, disabled, exhausted
++            )
++            continue
++        except SourceQueryFailed as exc:
++            unused = quotas[source] - counts[source]
++            disabled.add(source)
++            quotas[source] = counts[source]
++            print(
++                f"[WARN] {source} query failed: {exc}. "
++                f"Pausing only this source; redistributing quota={unused}.",
++                flush=True,
++            )
++            redistribute_quota(
++                quotas, sources, source, unused, disabled, exhausted
++            )
++            continue
++        except Exception as exc:
++            unused = quotas[source] - counts[source]
++            disabled.add(source)
++            quotas[source] = counts[source]
++            print(
++                f"[WARN] {source} discovery error: {exc}. "
++                f"Pausing only this source; redistributing quota={unused}.",
++                flush=True,
++            )
++            redistribute_quota(
++                quotas, sources, source, unused, disabled, exhausted
++            )
++            continue
++
++        keys = paper_identity_keys(item)
++        duplicate_key = next(
++            (key for key in keys if key in dedup_keys),
++            None,
++        )
++        if duplicate_key:
++            print(
++                f'[DUP] {source}: {item.get("title", "")[:90]} '
++                f'| {duplicate_key}',
++                flush=True,
++            )
++            continue
++
++        dedup_keys.update(keys)
++        counts[source] += 1
++        emitted += 1
++        yield item
+ 
+     print(
+         "[papers] scheduler emitted: "
+         + ", ".join(f"{s}={counts[s]}" for s in sources),
+         flush=True,
+     )
++
+ 
+ def mit_candidates(client: Client, category: str) -> Iterable[dict]:
+     endpoint = "lecture-videos" if category == "videos" else "lecture-notes"
+@@ -1110,6 +1269,7 @@
+         "search_query", "discipline", "discipline_evidence",
+         "discipline_verification_level", "journal", "journal_issn",
+         "oa_status", "oa_verified", "oa_pdf_source", "openalex_id",
++        "openalex_source_id",
+         "oa_verification_level", "source_group", "filter_status",
+         "filter_reason", "duplicate_key",
+     ]
