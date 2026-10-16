@@ -1,0 +1,1 @@
+{"category": "papers", "phase": "discovery", "error": "HTTPSConnectionPool(host='export.arxiv.org', port=443): Max retries exceeded with url: /api/query?search_query=cat%3Aphysics.chem-ph&start=0&max_results=100&sortBy=submittedDate&sortOrder=descending (Caused by ResponseError('too many 429 error responses'))", "at": "2026-10-16T02:56:03.548260+00:00"}

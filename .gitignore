@@ -1,0 +1,48 @@
+# =========================
+# Python
+# =========================
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environment
+.venv/
+venv/
+env/
+
+# =========================
+# PyCharm
+# =========================
+.idea/
+
+# =========================
+# Local environment
+# =========================
+.env
+
+# =========================
+# Raw datasets
+# =========================
+chemistry_dataset/*/raw/
+chemistry_dataset/raw/
+
+# Large source files
+*.pdf
+*.mp4
+*.avi
+*.mov
+*.mkv
+*.wav
+*.mp3
+*.zip
+*.7z
+*.rar
+
+# Temporary files
+*.tmp
+*.temp
+*.log
+
+# OS
+.DS_Store
+Thumbs.db
