@@ -1,123 +1,290 @@
-# Chemistry Ontology Design & Annotation Dataset
+# Chemistry Source Collector V5.3（arXiv + Nature）
 
-化学学科本体设计与标注数据集的原始资料采集项目。
+## 1. 版本定位
 
-## V5 论文采集器
+V5.3 是在你之前提供的 **V5.2** 基础上重新整理的版本。
 
-V5 不再采用：
-
-```text
-arXiv → 失败 → Nature/Science 兜底
-```
-
-而采用：
+当前阶段不再使用 Science / Science Advances：
 
 ```text
 arXiv ───────┐
-Nature ──────┼──→ 平衡轮询 → 统一化学验证 → 全局查重 → 下载 → SHA-256
-Science ─────┘
+             ├──→ 平衡轮询 → 全局查重 → 化学领域验证 → 下载 → SHA-256
+Nature ──────┘
 ```
 
-### 默认论文来源
+不会删除或覆盖你已经采集的数据。
 
-- arXiv `physics.chem-ph`
-- Nature Portfolio：Nature Chemistry、Communications Chemistry、Nature Catalysis、Nature Synthesis、Nature Chemical Biology、Nature Communications
-- Science family：Science Advances
+---
 
-Nature/Science 路线通过 OpenAlex 获取论文元数据和 OA PDF 位置，不绕过付费墙。
+## 2. 当前论文来源
 
-### 平衡策略
+### arXiv
 
-默认把“本次还需要补的数量”平均分配到启用的来源，然后 round-robin 轮询。
-
-例如还需要 20 篇：
+使用官方：
 
 ```text
-arXiv       7
-Nature      7
-Science     6
+physics.chem-ph
 ```
 
-也可以显式指定：
+因此不需要再做复杂的文章级化学关键词判断。
+
+### Nature Portfolio
+
+V5.3 暂时只启用化学学科定位非常明确的期刊：
+
+- Nature Chemistry
+- Communications Chemistry
+- Nature Catalysis
+- Nature Synthesis
+- Nature Chemical Biology
+
+这些期刊在来源层面已经属于化学核心期刊，因此 V5.3 不再要求：
 
 ```text
---source-targets arxiv=7,nature=7,science=6
+title/abstract 必须命中 chemistry / chemical / molecule ...
 ```
 
-注意：你已有的旧 arXiv 文件会保留并计入总文件数；V5 平衡的是新增采集部分，不会为了“比例”删除历史数据。
+也就是说，**期刊身份本身就是化学领域证据**。
 
-### 全局查重
+暂时移除 Nature Communications，因为它属于综合性期刊，需要额外的文章级筛选；当前目标是先稳定、快速地建立化学论文原始语料。
 
-跨来源使用：
+---
+
+## 3. 为什么比之前的 V5.3 快
+
+### ① 删除 Science
+
+不再访问：
+
+```text
+Science Advances
+```
+
+因此不会再出现：
+
+```text
+0 chemistry-qualified
+```
+
+这一类问题。
+
+### ② Nature 不再做复杂的文章级化学筛选
+
+对于上述 5 个化学核心期刊：
+
+```text
+ISSN / OpenAlex Source
+        ↓
+期刊身份
+        ↓
+直接认为 Chemistry
+        ↓
+只检查 OA + PDF
+```
+
+### ③ Nature 查询采用惰性方式
+
+不是启动时把所有 Nature 子刊全部查一遍。
+
+例如：
+
+```text
+先查 Nature Chemistry
+    ↓
+已经找到足够的新论文
+    ↓
+不继续查 Communications Chemistry / Nature Catalysis ...
+```
+
+只有前面的期刊候选不足时才继续访问下一个期刊。
+
+### ④ API 快速失败
+
+V5.3 不再针对 HTTP 429 做长时间等待。
+
+OpenAlex / arXiv 暂时不可用时，只暂停对应来源并把未完成配额转给另一个来源。
+
+### ⑤ 下载失败不消耗来源配额
+
+例如：
+
+```text
+Nature 候选 A
+↓
+403 / timeout
+↓
+不消耗 Nature 配额
+↓
+继续找 Nature 候选 B
+```
+
+---
+
+## 4. 查重
+
+保留 V5.2 的全局查重机制：
 
 1. DOI
 2. arXiv ID
 3. OpenAlex ID
-4. 标题规范化
+4. 规范化标题
 5. 下载 URL
+6. SHA-256 内容级查重
 
-下载完成后再使用 SHA-256 做内容级最终去重。
-
-因此同一篇论文从 arXiv 和 Nature OA 位置同时出现时，只保留一份源文件。
-
-## 项目结构
+所以同一篇论文：
 
 ```text
-dataset/
-├── collector.py                 # 核心采集器
-├── crawl/                       # 所有爬取入口
-│   ├── crawl_papers.py
-│   ├── crawl_videos.py
-│   ├── crawl_textbooks.py
-│   ├── crawl_teaching.py
-│   └── crawl_methods.py
-├── tools/                       # 审计/分析等非爬取工具
-│   └── audit_papers.py
-├── config/
-│   └── textbook_seeds.csv
-├── chemistry_dataset/
-│   ├── papers_dataset/
-│   ├── videos_dataset/
-│   ├── textbooks_dataset/
-│   ├── teaching_dataset/
-│   └── methods_dataset/
-├── docs/
-├── requirements.txt
-└── .gitignore
+arXiv
+    +
+Nature OA
 ```
 
-## PyCharm 中运行
+只会保留一份。
 
-PyCharm 的 Run Configuration 建议选择：
+---
+
+## 5. 配额逻辑
+
+V5.3 的来源配额指的是：
+
+> **成功下载的、非重复文件数量**
+
+例如现在已有：
 
 ```text
-Script path:
-F:\...\dataset\crawl\crawl_papers.py
+127 篇
 ```
 
-Working directory：
+目标：
 
 ```text
-F:\...\dataset
+130 篇
 ```
 
-直接运行即可。
-
-## 论文目标
-
-`crawl/crawl_papers.py` 默认：
+需要：
 
 ```text
-target = 120
-sources = arxiv,nature,science
+3 篇
 ```
 
-如果已有 100 篇历史论文，则本次只尝试补齐剩余 20 篇。
+默认：
 
-如果某来源 429 或暂时不可用，只暂停该来源；其他来源继续。
+```text
+arxiv=2
+nature=1
+```
 
-## Git
+调度顺序：
 
-GitHub 仓库只保存代码、配置和轻量元数据。
+```text
+arXiv
+  ↓
+Nature
+  ↓
+arXiv
+```
 
-PDF/MP4 等原始文件由 `.gitignore` 排除，不建议直接提交到普通 Git 仓库。
+如果某篇重复：
+
+```text
+[DUP]
+```
+
+不会消耗配额。
+
+如果下载失败：
+
+```text
+[SKIP]
+```
+
+也不会消耗配额。
+
+---
+
+## 6. PyCharm 中运行
+
+直接运行：
+
+```text
+crawl/crawl_papers.py
+```
+
+当前脚本：
+
+```python
+TARGET = 130
+```
+
+以后例如需要 200 篇：
+
+```python
+TARGET = 200
+```
+
+即可。
+
+---
+
+## 7. 数据保存
+
+原有目录不变：
+
+```text
+chemistry_dataset/
+└── papers_dataset/
+    ├── raw/
+    │   └── papers/
+    ├── manifest.jsonl
+    ├── errors.jsonl
+    ├── papers_v5_3_candidates.csv
+    └── papers_v5_3_filtered_out.csv
+```
+
+V5.3 不删除旧的 `raw/` 文件。
+
+---
+
+## 8. 替换方法
+
+把：
+
+```text
+collector.py
+```
+
+替换到你当前项目根目录：
+
+```text
+F:\Ontology_Design_Annotation\get_data\chemistry_source_collector\collector.py
+```
+
+然后把：
+
+```text
+crawl/crawl_papers.py
+```
+
+替换成压缩包里的版本。
+
+**不需要删除 `.venv`。**
+
+**不需要删除已经采集的论文。**
+
+---
+
+## 9. V5.3 与当前问题的对应关系
+
+| 问题 | V5.3 处理 |
+|---|---|
+| Science Advances 化学验证过严 | 直接移除 Science |
+| Nature 化学验证复杂 | 化学核心期刊直接按期刊身份验证 |
+| `signature_ok is not defined` | 保留 V5.2 的完整 `signature_ok()` |
+| 下载失败消耗配额 | 不消耗 |
+| SHA-256 重复 | 不消耗 |
+| arXiv/Nature 互相重复 | 全局查重 |
+| API 429 等待太久 | 快速失败 |
+| Nature 所有期刊一次性查询 | 惰性查询 |
+| 旧数据 | 保留 |
+| 来源比例 | arXiv/Nature 两来源平衡轮询 |
+

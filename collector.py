@@ -1,26 +1,31 @@
 #!/usr/bin/env python3
 """
-Chemistry Source Collector V5.1.
+Chemistry Source Collector V5.3 (arXiv + Nature).
 
-V5.1 fixes OpenAlex journal filtering and strengthens balanced multi-source
-round-robin scheduling. A source that returns HTTP 429 is disabled only for
-the current run. Existing raw files and manifest records are preserved.
+V5.3 is based directly on V5.2, but removes the Science channel and simplifies
+the paper pipeline for the current chemistry-source collection task.
 
 Paper sources:
   arxiv   -> arXiv physics.chem-ph
-  nature  -> Nature Portfolio journals via OpenAlex
-  science -> Science family / Science Advances via OpenAlex
+  nature  -> chemistry-focused Nature Portfolio journals via OpenAlex
 
-Dedup across paper sources:
-  DOI -> arXiv ID -> OpenAlex ID -> normalized title -> URL
-After download, SHA-256 is checked as a final content-level duplicate guard.
+Design choices:
+  - No Science/Science Advances source in V5.3.
+  - Nature chemistry-core journals are accepted directly by journal identity;
+    article-level keyword screening is not required for these journals.
+  - arXiv is accepted by the official physics.chem-ph category.
+  - Sources are round-robin scheduled and successful-download quotas are tracked.
+  - DOI/arXiv ID/OpenAlex ID/title/URL + SHA-256 are used for global deduplication.
+  - Existing raw files and manifest records are preserved.
+  - API failures fail fast for the affected source instead of long retry cycles.
 
 Examples:
-  python collector.py --categories papers --limit 120 --download
-  python collector.py --categories papers --limit 120 --download \
-      --paper-sources arxiv,nature,science \
-      --source-targets arxiv=40,nature=40,science=40
+  python collector.py --categories papers --limit 130 --download
+  python collector.py --categories papers --limit 130 --download \
+      --paper-sources arxiv,nature \
+      --source-targets arxiv=2,nature=1
 """
+
 from __future__ import annotations
 
 import argparse
@@ -51,7 +56,7 @@ CATEGORIES = {"papers", "videos", "teaching", "methods", "textbooks"}
 
 PAPER_SOURCES = {
     "nature": {
-        "label": "Nature Portfolio",
+        "label": "Nature Portfolio (chemistry-focused)",
         "publisher": "Nature Portfolio",
         "journals": [
             ("Nature Chemistry", "1755-4349",
@@ -64,25 +69,9 @@ PAPER_SOURCES = {
              "https://www.nature.com/natsynth/", "chemistry_core"),
             ("Nature Chemical Biology", "1552-4469",
              "https://www.nature.com/nchembio/", "chemistry_core"),
-            ("Nature Communications", "2041-1723",
-             "https://www.nature.com/ncomms/", "chemistry_broad"),
-        ],
-    },
-    "science": {
-        "label": "Science family",
-        "publisher": "AAAS / Science family",
-        "journals": [
-            ("Science Advances", "2375-2548",
-             "https://www.science.org/journal/sciadv", "chemistry_broad"),
         ],
     },
 }
-
-OA_BROAD_SEARCH = (
-    "chemistry OR chemical OR molecular OR catalysis OR spectroscopy "
-    "OR synthesis OR electrochemistry OR polymer OR materials "
-    "OR biochemistry OR reaction OR ligand OR solvent"
-)
 
 CHEMISTRY_SIGNAL = re.compile(
     r"\b(?:chemistry|chemical(?:s|ly)?|molecul(?:e|es|ar)|"
@@ -212,11 +201,11 @@ class Client:
     def __init__(self, contact: str, respect_robots: bool = True):
         self.session = requests.Session()
         self.session.headers.update({
-            "User-Agent": f"AcademicChemistrySourceCollector/5.0 (contact: {contact})"
+            "User-Agent": f"AcademicChemistrySourceCollector/5.2 (contact: {contact})"
         })
         retry = Retry(
-            total=2, connect=2, read=2, status=2,
-            backoff_factor=1.0,
+            total=1, connect=1, read=1, status=1,
+            backoff_factor=0.5,
             status_forcelist=[500, 502, 503, 504],
             respect_retry_after_header=True,
             raise_on_status=False,
@@ -257,7 +246,14 @@ class Client:
             self.session.headers["User-Agent"], url
         )
 
-    def get(self, url: str, *, stream: bool = False, api_name: str = ""):
+    def get(
+        self,
+        url: str,
+        *,
+        stream: bool = False,
+        api_name: str = "",
+        timeout: tuple[int, int] | None = None,
+    ):
         if not url.startswith("https://"):
             raise ValueError("Only HTTPS sources are supported")
         host = urlparse(url).netloc.lower()
@@ -270,7 +266,9 @@ class Client:
             for attempt in range(2):
                 try:
                     response = self.session.get(
-                        url, timeout=(12, 45), stream=stream
+                        url,
+                        timeout=timeout or (8, 25),
+                        stream=stream,
                     )
                 except requests.RequestException as exc:
                     if attempt == 0:
@@ -305,9 +303,13 @@ class Client:
         if not self.robots_allowed(url):
             raise PermissionError(f"Disallowed by robots.txt: {url}")
 
-        gap = 4.0 if "arxiv.org" in host else 1.2
+        gap = 3.0 if "arxiv.org" in host else 1.0
         self._throttle(host, gap)
-        response = self.session.get(url, timeout=(20, 120), stream=stream)
+        response = self.session.get(
+            url,
+            timeout=timeout or ((10, 45) if stream else (10, 30)),
+            stream=stream,
+        )
         if response.status_code == 429:
             raise SourceTemporarilyUnavailable(f"{host} HTTP 429")
         response.raise_for_status()
@@ -419,14 +421,46 @@ def arxiv_candidates(client: Client, pool_size: int) -> Iterable[dict]:
             return
 
 
-def openalex_pdf_url(work: dict) -> str:
+def openalex_pdf_url(
+    work: dict,
+    preferred_domains: tuple[str, ...] = (),
+) -> str:
+    """Return an OA PDF URL, preferring publisher-hosted copies when requested."""
+    locations = []
+
     best = work.get("best_oa_location") or {}
-    pdf = (best.get("pdf_url") or "").strip()
-    if pdf:
-        return pdf
+    if best:
+        locations.append(best)
+
     for loc in work.get("locations") or []:
+        if loc and loc not in locations:
+            locations.append(loc)
+
+    # For Nature, prefer the publisher/CDN PDF. This avoids spending time on
+    # repository mirrors such as Research Square or ChemRxiv when a publisher
+    # copy is available.
+    if preferred_domains:
+        for loc in locations:
+            if not loc.get("is_oa") and loc is not best:
+                continue
+            pdf = (loc.get("pdf_url") or "").strip()
+            if not pdf:
+                continue
+            hosts = (
+                urlparse(pdf).netloc.lower(),
+                urlparse(str(loc.get("landing_page_url") or "")).netloc.lower(),
+            )
+            if any(
+                domain.lower() in host
+                for domain in preferred_domains
+                for host in hosts
+            ):
+                return pdf
+
+    for loc in locations:
         if loc and loc.get("is_oa") and loc.get("pdf_url"):
             return str(loc["pdf_url"]).strip()
+
     return ""
 
 
@@ -527,15 +561,17 @@ def openalex_topic_text(work: dict) -> str:
 def openalex_source_candidates(
     client: Client,
     source_group: str,
-    per_journal: int = 60,
+    per_journal: int = 30,
 ) -> Iterable[dict]:
     """
-    Discover OA PDF works from a configured journal family.
+    Discover OA PDF works from the configured Nature chemistry journals.
 
-    Each journal is independently resolved and queried. A bad query for one
-    journal does not make the entire source group look "exhausted".
-    If OpenAlex is rate-limited (429), the whole source group is paused for
-    the current run because repeated calls would only make the situation worse.
+    V5.3 keeps this path deliberately simple:
+      - all configured journals are chemistry-core journals;
+      - no article-level keyword gate is required;
+      - only OA articles with a PDF location are returned;
+      - journals are queried lazily, so a successful Nature Chemistry query
+        normally satisfies the Nature quota without querying every journal.
     """
     cfg = PAPER_SOURCES[source_group]
     successful_queries = 0
@@ -550,30 +586,28 @@ def openalex_source_candidates(
             failed_queries += 1
             print(
                 f"[WARN] OpenAlex source lookup failed for {name}: {exc}; "
-                "trying the next configured journal.",
+                "trying the next Nature journal.",
                 flush=True,
             )
             continue
 
         source_id = source["id"]
 
+        # Keep the response small. The PDF is the primary artifact; metadata
+        # here is only for provenance and later ontology preprocessing.
         params = {
             "filter": (
                 f"primary_location.source.id:{source_id},"
                 "open_access.is_oa:true,has_content.pdf:true,type:article"
             ),
-            "per_page": min(100, max(10, per_journal)),
-
-            # OpenAlex 当前 API 的降序写法
+            "per_page": min(50, max(10, per_journal)),
             "sort": "publication_date:desc",
             "select": (
-                "id,doi,title,publication_date,type,open_access,"
+                "id,doi,title,publication_date,open_access,"
                 "best_oa_location,locations,abstract_inverted_index,"
-                "primary_location,primary_topic,topics"
+                "primary_location"
             ),
         }
-        if scope == "chemistry_broad":
-            params["search"] = OA_BROAD_SEARCH
 
         url = OPENALEX_API + "?" + urlencode(params)
 
@@ -585,7 +619,7 @@ def openalex_source_candidates(
             failed_queries += 1
             print(
                 f"[WARN] OpenAlex works query failed for {name}: {exc}; "
-                "trying the next configured journal.",
+                "trying the next Nature journal.",
                 flush=True,
             )
             continue
@@ -593,36 +627,36 @@ def openalex_source_candidates(
             failed_queries += 1
             print(
                 f"[WARN] OpenAlex works response invalid for {name}: {exc}; "
-                "trying the next configured journal.",
+                "trying the next Nature journal.",
                 flush=True,
             )
             continue
 
         successful_queries += 1
         results = data.get("results", [])
-        print(
-            f"[OpenAlex] {name}: {len(results)} OA/PDF article candidates",
-            flush=True,
-        )
+        qualified_items = []
 
         for work in results:
-            journal = {
-                "name": name,
-                "issn": issn,
-                "url": journal_url,
-                "scope": scope,
-            }
-            ok, evidence = publisher_is_chemistry(work, journal)
-            if not ok:
-                continue
-
-            pdf = openalex_pdf_url(work)
+            # Every configured V5.3 Nature journal is chemistry-core.
+            pdf = openalex_pdf_url(
+                work,
+                preferred_domains=(
+                    "nature.com",
+                    "media.springernature.com",
+                    "link.springer.com",
+                ),
+            )
             if not pdf or not acceptable_link(pdf, ".pdf"):
                 continue
 
             oa = work.get("open_access") or {}
             best = work.get("best_oa_location") or {}
-            source_page = best.get("landing_page_url") or ""
+            primary_location = work.get("primary_location") or {}
+            source_page = (
+                best.get("landing_page_url")
+                or primary_location.get("landing_page_url")
+                or ""
+            )
             doi = normalize_doi(work.get("doi", ""))
 
             if not source_page and doi:
@@ -632,7 +666,7 @@ def openalex_source_candidates(
 
             license_name = best.get("license") or ""
 
-            yield {
+            qualified_items.append({
                 "category": "papers",
                 "resource_kind": "research_article",
                 "title": " ".join((work.get("title") or "").split()),
@@ -663,12 +697,24 @@ def openalex_source_candidates(
                 "openalex_id": work.get("id", ""),
                 "openalex_source_id": source_id,
                 "discipline": "Chemistry",
-                "discipline_evidence": evidence,
+                "chemistry_verified": True,
+                "discipline_evidence": (
+                    f"ISSN-verified chemistry journal: {name}"
+                ),
                 "discipline_verification_level": (
-                    "issn->openalex_source_id+journal_scope+metadata+oa_pdf"
+                    "chemistry_core_journal+openalex_oa_pdf"
                 ),
                 "source_group": source_group,
-            }
+            })
+
+        print(
+            f"[OpenAlex] {name}: {len(results)} OA/PDF candidates; "
+            f"{len(qualified_items)} chemistry-qualified",
+            flush=True,
+        )
+
+        for item in qualified_items:
+            yield item
 
     if successful_queries == 0 and failed_queries > 0:
         raise SourceQueryFailed(
@@ -745,10 +791,17 @@ def classify_candidate(item: dict) -> tuple[str, str]:
                 "official arXiv primary_category=physics.chem-ph"
             )
 
+        # V5.3 Nature records are verified at the journal level. This is
+        # intentionally broader and faster than article-level screening.
+        if item.get("chemistry_verified") is True:
+            return "accepted", (
+                item.get("discipline_evidence")
+                or "chemistry-core journal evidence"
+            )
+
         chemistry_journals = {
             name
-            for cfg in PAPER_SOURCES.values()
-            for name, _, _, scope in cfg["journals"]
+            for name, _, _, scope in PAPER_SOURCES["nature"]["journals"]
             if scope == "chemistry_core"
         }
         if item.get("journal") in chemistry_journals:
@@ -763,10 +816,7 @@ def classify_candidate(item: dict) -> tuple[str, str]:
                 "OA metadata + chemistry signal in title/abstract"
             )
 
-        # Backward compatibility with your existing first-generation arXiv
-        # collection. If an old record came from the chem-ph query but its
-        # primary category was not persisted, call it likely_chemistry rather
-        # than pretending it is verified or rejecting it.
+        # Historical arXiv records without persisted primary_category.
         if (
             item.get("search_query") == "cat:physics.chem-ph"
             or item.get("source_group") == "arxiv"
@@ -884,37 +934,43 @@ def balanced_paper_candidates(
     total_needed: int,
     source_targets: dict[str, int],
     dedup_keys: set[str],
+    success_counts: Counter,
 ) -> Iterable[dict]:
     """
-    True round-robin paper scheduler with global deduplication.
+    Two-source round-robin scheduler for arXiv + Nature.
 
-    - Sources take turns instead of repeatedly favoring the first source.
-    - Duplicates do not consume quota.
-    - Only the affected source is disabled on a temporary/API failure.
-    - Unused quota is redistributed among the remaining sources.
-    - HTTP 400 is reported as a query failure, not as "source exhausted".
+    Quotas represent successful unique downloads, not candidates emitted:
+      - identity duplicates do not consume quota;
+      - SHA-256 duplicates do not consume quota;
+      - download failures do not consume quota;
+      - an unavailable/exhausted source redistributes its unmet quota.
     """
     iterators = {}
 
     if "arxiv" in sources:
         iterators["arxiv"] = iter(
-            arxiv_candidates(client, pool_size=max(100, total_needed * 5))
-        )
-    if "nature" in sources:
-        iterators["nature"] = iter(
-            openalex_source_candidates(client, "nature", per_journal=60)
-        )
-    if "science" in sources:
-        iterators["science"] = iter(
-            openalex_source_candidates(client, "science", per_journal=80)
+            arxiv_candidates(
+                client,
+                pool_size=max(50, total_needed * 6),
+            )
         )
 
-    counts = Counter()
+    if "nature" in sources:
+        iterators["nature"] = iter(
+            openalex_source_candidates(
+                client,
+                "nature",
+                per_journal=30,
+            )
+        )
+
     quotas = Counter(source_targets)
-    disabled = set()
-    exhausted = set()
-    emitted = 0
+    disabled: set[str] = set()
+    exhausted: set[str] = set()
+    discovered = Counter()
     cursor = 0
+    attempts = 0
+    max_attempts = max(100, total_needed * 30)
 
     print(
         "[papers] initial balanced quotas: "
@@ -922,18 +978,19 @@ def balanced_paper_candidates(
         flush=True,
     )
 
-    while emitted < total_needed:
+    while (
+        sum(success_counts[s] for s in sources) < total_needed
+        and attempts < max_attempts
+    ):
         active = [
             s for s in sources
             if s not in disabled
             and s not in exhausted
-            and quotas[s] > counts[s]
+            and success_counts[s] < quotas[s]
         ]
         if not active:
             break
 
-        # Strictly rotate through the configured source order. Duplicates
-        # therefore cannot cause arXiv to monopolize discovery.
         chosen = None
         for step in range(len(sources)):
             idx = (cursor + step) % len(sources)
@@ -947,16 +1004,17 @@ def balanced_paper_candidates(
             break
 
         source = chosen
+        attempts += 1
 
         try:
             item = next(iterators[source])
         except StopIteration:
-            unused = quotas[source] - counts[source]
+            unused = max(0, quotas[source] - success_counts[source])
             exhausted.add(source)
-            quotas[source] = counts[source]
+            quotas[source] = success_counts[source]
             print(
                 f"[papers] source exhausted: {source}; "
-                f"redistributing unused quota={unused}.",
+                f"redistributing unmet quota={unused}.",
                 flush=True,
             )
             redistribute_quota(
@@ -964,9 +1022,9 @@ def balanced_paper_candidates(
             )
             continue
         except SourceTemporarilyUnavailable as exc:
-            unused = quotas[source] - counts[source]
+            unused = max(0, quotas[source] - success_counts[source])
             disabled.add(source)
-            quotas[source] = counts[source]
+            quotas[source] = success_counts[source]
             print(
                 f"[WARN] {source} temporarily unavailable: {exc}. "
                 f"Pausing only this source; redistributing quota={unused}.",
@@ -977,9 +1035,9 @@ def balanced_paper_candidates(
             )
             continue
         except SourceQueryFailed as exc:
-            unused = quotas[source] - counts[source]
+            unused = max(0, quotas[source] - success_counts[source])
             disabled.add(source)
-            quotas[source] = counts[source]
+            quotas[source] = success_counts[source]
             print(
                 f"[WARN] {source} query failed: {exc}. "
                 f"Pausing only this source; redistributing quota={unused}.",
@@ -990,9 +1048,9 @@ def balanced_paper_candidates(
             )
             continue
         except Exception as exc:
-            unused = quotas[source] - counts[source]
+            unused = max(0, quotas[source] - success_counts[source])
             disabled.add(source)
-            quotas[source] = counts[source]
+            quotas[source] = success_counts[source]
             print(
                 f"[WARN] {source} discovery error: {exc}. "
                 f"Pausing only this source; redistributing quota={unused}.",
@@ -1002,6 +1060,8 @@ def balanced_paper_candidates(
                 quotas, sources, source, unused, disabled, exhausted
             )
             continue
+
+        discovered[source] += 1
 
         keys = paper_identity_keys(item)
         duplicate_key = next(
@@ -1016,14 +1076,26 @@ def balanced_paper_candidates(
             )
             continue
 
+        # Reserve the identity during this run. Success is counted only after
+        # the file is downloaded and passes SHA-256 de-duplication.
         dedup_keys.update(keys)
-        counts[source] += 1
-        emitted += 1
         yield item
 
+    if attempts >= max_attempts:
+        print(
+            f"[WARN] paper scheduler reached safety attempt limit "
+            f"{max_attempts}; stopping without fabricating files.",
+            flush=True,
+        )
+
     print(
-        "[papers] scheduler emitted: "
-        + ", ".join(f"{s}={counts[s]}" for s in sources),
+        "[papers] scheduler candidates discovered: "
+        + ", ".join(f"{s}={discovered[s]}" for s in sources),
+        flush=True,
+    )
+    print(
+        "[papers] scheduler successful downloads: "
+        + ", ".join(f"{s}={success_counts[s]}" for s in sources),
         flush=True,
     )
 
@@ -1272,7 +1344,8 @@ def save_csv(path: Path, rows: list[dict]) -> None:
         "discipline_verification_level", "journal", "journal_issn",
         "oa_status", "oa_verified", "oa_pdf_source", "openalex_id",
         "openalex_source_id",
-        "oa_verification_level", "source_group", "filter_status",
+        "oa_verification_level", "chemistry_verified", "source_group",
+        "filter_status",
         "filter_reason", "duplicate_key",
     ]
 
@@ -1291,10 +1364,13 @@ def collect_papers(client: Client, args, root: Path) -> None:
     errors = root / "errors.jsonl"
 
     old = load_manifest(manifest, root)
-    old_papers = [r for r in old if r.get("category") == "papers"]
+    old_papers = [
+        r for r in old
+        if r.get("category") == "papers"
+    ]
 
-    # Backward compatibility with your existing arXiv collection:
-    # legacy arXiv files are retained and count toward the file target.
+    # Preserve all existing chemistry-relevant papers. Historical arXiv
+    # records without complete metadata are still counted by source evidence.
     chemistry_old = []
     for record in old_papers:
         status, _ = classify_candidate(record)
@@ -1325,7 +1401,7 @@ def collect_papers(client: Client, args, root: Path) -> None:
         for x in args.paper_sources.split(",")
         if x.strip()
     ]
-    allowed = {"arxiv", "nature", "science"}
+    allowed = {"arxiv", "nature"}
 
     if not sources:
         raise ValueError("No paper source configured")
@@ -1333,12 +1409,15 @@ def collect_papers(client: Client, args, root: Path) -> None:
     unknown = set(sources) - allowed
     if unknown:
         raise ValueError(
-            "Unknown --paper-sources: " + ",".join(sorted(unknown))
+            "V5.3 only supports arxiv,nature; unknown source(s): "
+            + ",".join(sorted(unknown))
         )
 
     need = args.limit - len(chemistry_old)
     quotas = parse_source_targets(
-        args.source_targets, sources, need
+        args.source_targets,
+        sources,
+        need,
     )
 
     print(
@@ -1346,12 +1425,16 @@ def collect_papers(client: Client, args, root: Path) -> None:
         flush=True,
     )
     print(
-        "[papers] source quotas: "
+        "[papers] desired successful-download quotas: "
         + ", ".join(f"{s}={quotas[s]}" for s in sources),
         flush=True,
     )
 
     dedup = build_global_dedup(old)
+    run_success = Counter()
+    run_candidates = Counter()
+    run_sha_duplicates = Counter()
+    run_download_failures = Counter()
     candidates = []
     filtered = []
     duplicates = []
@@ -1362,9 +1445,12 @@ def collect_papers(client: Client, args, root: Path) -> None:
         need,
         quotas,
         dedup,
+        run_success,
     ):
-        status, reason = classify_candidate(item)
+        source = item.get("source_group", "unknown")
+        run_candidates[source] += 1
 
+        status, reason = classify_candidate(item)
         if status != "accepted":
             filtered.append({
                 **item,
@@ -1378,24 +1464,34 @@ def collect_papers(client: Client, args, root: Path) -> None:
             "discipline": "Chemistry",
             "discipline_evidence": reason,
             "discipline_verification_level": (
-                "source_category_or_journal+metadata+oa_pdf"
+                item.get("discipline_verification_level")
+                or "source_category_or_chemistry_journal+oa_pdf"
             ),
         }
         candidates.append(item)
 
         if not args.download:
+            run_success[source] += 1
+            print(
+                f'[papers] selected (no download): '
+                f'{source} | {item.get("title", "")[:100]}',
+                flush=True,
+            )
             continue
 
         try:
             record = download_one(
-                client, item, root, args.max_file_mb
+                client,
+                item,
+                root,
+                args.max_file_mb,
             )
 
             sha_key = "sha256:" + record["sha256"].lower()
-
             if sha_key in dedup:
                 duplicate_path = root / record["file"]
                 duplicate_path.unlink(missing_ok=True)
+                run_sha_duplicates[source] += 1
 
                 duplicates.append({
                     **item,
@@ -1403,70 +1499,115 @@ def collect_papers(client: Client, args, root: Path) -> None:
                     "filter_reason": "SHA-256 already exists",
                     "duplicate_key": sha_key,
                 })
+
+                print(
+                    f'[DUP-SHA] {source}: '
+                    f'{item.get("title", "")[:100]} | {sha_key}',
+                    flush=True,
+                )
                 continue
 
             save_jsonl(manifest, record)
             old.append(record)
             dedup.add(sha_key)
-
-            # Reserve all identity keys for the newly accepted work.
             dedup.update(paper_identity_keys(record))
+            run_success[source] += 1
 
-            total_papers = sum(
-                1 for r in old if r.get("category") == "papers"
+            chemistry_total = (
+                len(chemistry_old) + sum(run_success.values())
             )
 
             print(
-                f'[papers] {total_papers}/{args.limit}: '
-                f'{record.get("source_group", "")} | '
+                f'[papers] {chemistry_total}/{args.limit}: '
+                f'{source} | '
                 f'{record.get("journal", "") or "arXiv"} | '
-                f'{record.get("title", "")[:100]}',
+                f'{record.get("title", "")[:100]} '
+                f'(run {run_success[source]}/{quotas[source]})',
                 flush=True,
             )
 
-            if total_papers >= args.limit:
+            if chemistry_total >= args.limit:
                 break
 
         except Exception as exc:
+            run_download_failures[source] += 1
             save_jsonl(errors, {
                 "category": "papers",
-                "source_group": item.get("source_group", ""),
+                "source_group": source,
                 "download_url": item.get("download_url", ""),
                 "error": str(exc),
                 "at": utc_now(),
             })
             print(
-                f'[SKIP] {item.get("download_url")}: {exc}',
+                f'[SKIP] {item.get("download_url")}: {exc} '
+                f'(source quota not consumed)',
                 flush=True,
             )
 
+    save_csv(root / "papers_v5_3_candidates.csv", candidates)
     save_csv(
-        root / "papers_v5_candidates.csv",
-        candidates,
-    )
-    save_csv(
-        root / "papers_v5_filtered_out.csv",
+        root / "papers_v5_3_filtered_out.csv",
         filtered + duplicates,
     )
 
     final_records = load_manifest(manifest, root)
-    final = sum(
-        1 for r in final_records if r.get("category") == "papers"
-    )
+    final_chemistry_records = []
 
+    for record in final_records:
+        if record.get("category") != "papers":
+            continue
+        status, _ = classify_candidate(record)
+        if status in {"accepted", "likely_chemistry"}:
+            final_chemistry_records.append(record)
+
+    final = len(final_chemistry_records)
     by_source = Counter(
         r.get("source_group", "unknown")
-        for r in final_records
-        if r.get("category") == "papers"
+        for r in final_chemistry_records
     )
 
     print(
-        f"[papers] V5 result: {final}/{args.limit}; "
-        f"source distribution: "
+        "[papers] run candidate distribution: "
+        + ", ".join(f"{s}={run_candidates[s]}" for s in sources),
+        flush=True,
+    )
+    print(
+        "[papers] run downloaded distribution: "
+        + ", ".join(f"{s}={run_success[s]}" for s in sources),
+        flush=True,
+    )
+    print(
+        "[papers] run SHA-duplicate distribution: "
+        + ", ".join(f"{s}={run_sha_duplicates[s]}" for s in sources),
+        flush=True,
+    )
+    print(
+        "[papers] run download-failure distribution: "
         + ", ".join(
-            f"{s}={by_source.get(s, 0)}"
-            for s in sources
+            f"{s}={run_download_failures[s]}" for s in sources
         ),
+        flush=True,
+    )
+
+    # Historical Science files, if present, are preserved and may count toward
+    # the total, but V5.3 never queries Science again.
+    historical_other = sum(
+        1 for r in final_chemistry_records
+        if r.get("source_group") not in sources
+    )
+    suffix = (
+        f", historical_other={historical_other}"
+        if historical_other
+        else ""
+    )
+
+    print(
+        f"[papers] V5.3 result: {final}/{args.limit}; "
+        f"cumulative chemistry source distribution: "
+        + ", ".join(
+            f"{s}={by_source.get(s, 0)}" for s in sources
+        )
+        + suffix,
         flush=True,
     )
 
@@ -1629,13 +1770,13 @@ def main() -> None:
     )
     parser.add_argument(
         "--paper-sources",
-        default="arxiv,nature,science",
-        help="comma-separated: arxiv,nature,science",
+        default="arxiv,nature",
+        help="comma-separated: arxiv,nature",
     )
     parser.add_argument(
         "--source-targets",
         default="",
-        help="e.g. arxiv=7,nature=7,science=6",
+        help="e.g. arxiv=5,nature=5",
     )
     parser.add_argument(
         "--max-file-mb",
