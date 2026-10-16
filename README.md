@@ -100,3 +100,5 @@ python collector.py --categories textbooks --limit 100 --download --books-csv te
 ## 未测试范围
 
 开发环境不具备对外 HTTP 下载能力，因此本工程完成了代码静态检查与离线解析测试，**但尚未在当前环境完成联网端到端下载**。网站的反爬/链接格式可能随时间变化，需要在用户本机联网验证。100 个 MP4 往往至少数 GB，必须预留空间。
+# dataset
+本体设计与标注数据集
