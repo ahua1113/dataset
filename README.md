@@ -2,9 +2,9 @@
 
 ## 1. 版本定位
 
-V5.3 是在你之前提供的 **V5.2** 基础上重新整理的版本。
+V5.3
 
-当前阶段不再使用 Science / Science Advances：
+当前阶段不再使用 Science / Science Advances，仅用arXiv和Nature
 
 ```text
 arXiv ───────┐
@@ -12,7 +12,7 @@ arXiv ───────┐
 Nature ──────┘
 ```
 
-不会删除或覆盖你已经采集的数据。
+不会删除或覆盖已经采集的数据。
 
 ---
 
@@ -245,35 +245,7 @@ V5.3 不删除旧的 `raw/` 文件。
 
 ---
 
-## 8. 替换方法
-
-把：
-
-```text
-collector.py
-```
-
-替换到你当前项目根目录：
-
-```text
-F:\Ontology_Design_Annotation\get_data\chemistry_source_collector\collector.py
-```
-
-然后把：
-
-```text
-crawl/crawl_papers.py
-```
-
-替换成压缩包里的版本。
-
-**不需要删除 `.venv`。**
-
-**不需要删除已经采集的论文。**
-
----
-
-## 9. V5.3 与当前问题的对应关系
+## 8. V5.3 与当前问题的对应关系
 
 | 问题 | V5.3 处理 |
 |---|---|
