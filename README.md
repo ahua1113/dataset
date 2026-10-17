@@ -1,4 +1,4 @@
-# Chemistry Source Collector V5.3（arXiv + Nature）
+# Chemistry Source Collector V5.3（article: arXiv + Nature,video: MIT OCW）
 
 ## 1. 版本定位
 
