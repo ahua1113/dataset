@@ -7,7 +7,7 @@ COLLECTOR = ROOT / "collector.py"
 
 # 当前论文目标：130 篇。
 # 如果以后需要 200 篇，只修改 TARGET 即可。
-TARGET = 130
+TARGET = 300
 
 cmd = [
     sys.executable,
