@@ -7,7 +7,7 @@ COLLECTOR = ROOT / "collector.py"
 
 # 当前论文目标：130 篇。
 # 如果以后需要 200 篇，只修改 TARGET 即可。
-TARGET = 300
+TARGET = 10
 
 cmd = [
     sys.executable,
@@ -15,7 +15,7 @@ cmd = [
     "--categories", "papers",
     "--limit", str(TARGET),
     "--download",
-    "--paper-sources", "arxiv,nature",
+    "--journals-file", str(ROOT / "config" / "journals_v6.json"),
     "--out", str(ROOT / "chemistry_dataset" / "papers_dataset"),
     "--contact", "1316400989@qq.com",
 ]

@@ -1,105 +1,59 @@
 #!/usr/bin/env python3
+"""Chemistry Source Collector V6.0.
+
+Papers: ten manually approved chemistry journals, OpenAlex OA PDF metadata,
+        per-journal rotation, global metadata and SHA-256 file deduplication.
+No preprint-source discovery and no publisher-login/paywall bypassing logic.
+The V5.3 MIT-OCW videos/teaching and optional methods/textbooks remain usable.
+
+Quick start:
+    python collector.py --categories papers --limit 300 --download
+    python collector.py --categories papers --limit 10 --dry-run
 """
-Chemistry Source Collector V5.3 (arXiv + Nature).
-
-V5.3 is based directly on V5.2, but removes the Science channel and simplifies
-the paper pipeline for the current chemistry-source collection task.
-
-Paper sources:
-  arxiv   -> arXiv physics.chem-ph
-  nature  -> chemistry-focused Nature Portfolio journals via OpenAlex
-
-Design choices:
-  - No Science/Science Advances source in V5.3.
-  - Nature chemistry-core journals are accepted directly by journal identity;
-    article-level keyword screening is not required for these journals.
-  - arXiv is accepted by the official physics.chem-ph category.
-  - Sources are round-robin scheduled and successful-download quotas are tracked.
-  - DOI/arXiv ID/OpenAlex ID/title/URL + SHA-256 are used for global deduplication.
-  - Existing raw files and manifest records are preserved.
-  - API failures fail fast for the affected source instead of long retry cycles.
-
-Examples:
-  python collector.py --categories papers --limit 130 --download
-  python collector.py --categories papers --limit 130 --download \
-      --paper-sources arxiv,nature \
-      --source-targets arxiv=2,nature=1
-"""
-
 from __future__ import annotations
 
 import argparse
 import csv
-from collections import Counter
+from dataclasses import dataclass
 from datetime import datetime, timezone
 import hashlib
 import json
-from pathlib import Path
 import re
 import time
-from typing import Iterable
+from pathlib import Path
+from typing import Iterator
 from urllib.parse import urlencode, urljoin, urlparse
 from urllib.robotparser import RobotFileParser
-import xml.etree.ElementTree as ET
 
 import requests
 from bs4 import BeautifulSoup
-from requests.adapters import HTTPAdapter
-from urllib3.util.retry import Retry
 
-ARXIV_API = "https://export.arxiv.org/api/query"
-OPENALEX_API = "https://api.openalex.org/works"
-OPENALEX_SOURCES_API = "https://api.openalex.org/sources"
+ROOT = Path(__file__).resolve().parent
+OPENALEX_SOURCES = "https://api.openalex.org/sources"
+OPENALEX_WORKS = "https://api.openalex.org/works"
 EPA_INDEX = "https://www.epa.gov/hw-sw846/sw-846-compendium"
 
-CATEGORIES = {"papers", "videos", "teaching", "methods", "textbooks"}
-
-PAPER_SOURCES = {
-    "nature": {
-        "label": "Nature Portfolio (chemistry-focused)",
-        "publisher": "Nature Portfolio",
-        "journals": [
-            ("Nature Chemistry", "1755-4349",
-             "https://www.nature.com/nchem/", "chemistry_core"),
-            ("Communications Chemistry", "2399-3669",
-             "https://www.nature.com/commschem/", "chemistry_core"),
-            ("Nature Catalysis", "2520-1158",
-             "https://www.nature.com/natcatal/", "chemistry_core"),
-            ("Nature Synthesis", "2731-0582",
-             "https://www.nature.com/natsynth/", "chemistry_core"),
-            ("Nature Chemical Biology", "1552-4469",
-             "https://www.nature.com/nchembio/", "chemistry_core"),
-        ],
-    },
-}
-
-CHEMISTRY_SIGNAL = re.compile(
-    r"\b(?:chemistry|chemical(?:s|ly)?|molecul(?:e|es|ar)|"
-    r"reaction(?:s)?|cataly\w*|spectroscop\w*|chromatograph\w*|"
-    r"electrochem\w*|photochem\w*|thermochem\w*|solvat\w*|solvent\w*|"
-    r"adsorp\w*|desorp\w*|organometal\w*|polymer\w*|"
-    r"chemical\s+bond\w*|hydrogen\s+bond\w*|quantum\s+chem\w*|"
-    r"ionic\s+liquid\w*|ligand\w*|biochem\w*|reagent\w*|"
-    r"reaction\s+kinetic\w*|photodissociat\w*|ferrocene|"
-    r"esterificat\w*|mass\s+spectrometr\w*|nuclear\s+magnetic\s+resonance|"
-    r"\bNMR\b|acid[\s.-]*base|redox|electrolyt\w*|ioniz\w*|"
-    r"chemical\s+equilibri\w*|crystal\s+field)\b",
-    re.IGNORECASE,
+# The only sources for PAPER discovery are ISSN-verified journals loaded from
+# config/journals_v6.json. There is deliberately no preprint crawler.
+CATEGORY_CHOICES = {"papers", "videos", "teaching", "methods", "textbooks"}
+EXCLUDED_ARTICLE_TITLES = re.compile(
+    r"^\s*(?:publisher(?:'s|’s)?\s+correction|author\s+correction|"
+    r"correction\s+(?:to|for)\b|erratum\b|retraction\b|"
+    r"expression\s+of\s+concern\b|editorial\b|book\s+review\b)", re.I,
 )
-
-CHEMISTRY_BOOK_TITLE = re.compile(
-    r"\b(?:chemistry|chemical|biochemistry|organic\s+chem|"
-    r"inorganic\s+chem|physical\s+chem|analytical\s+chem)\b",
-    re.IGNORECASE,
+BLOCKED_PDF_HOSTS = (
+    "arxiv.org", "chemrxiv.org", "biorxiv.org", "medrxiv.org",
+    "ssrn.com", "researchsquare.com",
 )
-
 VIDEO_NON_CHEMICAL_TOPIC = re.compile(
     r"\b(?:writing\s+up\s+the\s+lab\s+report|"
     r"ellen\s+swallow\s+richards|how\s+to\s+use\s+this\s+course|"
-    r"administrative\s+announcements)\b",
-    re.IGNORECASE,
+    r"administrative\s+announcements)\b", re.I,
 )
-
+CHEMISTRY_BOOK_TITLE = re.compile(
+    r"\b(?:chemistry|chemical|biochemistry|organic\s+chem|"
+    r"inorganic\s+chem|physical\s+chem|analytical\s+chem)\b", re.I,
+)
 MIT_COURSES = [
     "https://ocw.mit.edu/courses/5-111sc-principles-of-chemical-science-fall-2014/",
     "https://ocw.mit.edu/courses/5-111-principles-of-chemical-science-fall-2008/",
@@ -109,1755 +63,760 @@ MIT_COURSES = [
     "https://ocw.mit.edu/courses/5-310-laboratory-chemistry-fall-2019/",
     "https://ocw.mit.edu/courses/5-07sc-biological-chemistry-i-fall-2013/",
 ]
-
 MIT_CHEMISTRY_SLUGS = {
-    "5-111sc-principles-of-chemical-science-fall-2014": "general_chemistry",
-    "5-111-principles-of-chemical-science-fall-2008": "general_chemistry",
-    "5-112-principles-of-chemical-science-fall-2005": "general_chemistry",
-    "5-60-thermodynamics-kinetics-spring-2008": "physical_chemistry",
-    "5-61-physical-chemistry-fall-2017": "physical_chemistry",
-    "5-310-laboratory-chemistry-fall-2019": "laboratory_chemistry",
-    "5-07sc-biological-chemistry-i-fall-2013": "biochemistry",
+    root.rstrip("/").split("/")[-1] for root in MIT_COURSES
 }
-
-MIME = {
-    ".pdf": "application/pdf",
-    ".mp4": "video/mp4",
-    ".webm": "video/webm",
-    ".doc": "application/msword",
-    ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-}
+MIME = {".pdf": "application/pdf", ".mp4": "video/mp4", ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document"}
 
 
-class SourceTemporarilyUnavailable(RuntimeError):
-    """The source is temporarily unavailable, typically due to HTTP 429."""
-    pass
-
-
-class SourceQueryFailed(RuntimeError):
-    """The source endpoint rejected or could not satisfy the query."""
-    pass
-
-
-def utc_now() -> str:
+def now_utc() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-def normalize_doi(value: str) -> str:
-    value = (value or "").strip().lower()
-    value = re.sub(r"^https?://doi\.org/", "", value)
-    return value.rstrip(" .;,")
+def normalized_title(title: str) -> str:
+    return re.sub(r"\s+", " ", re.sub(r"[^\w\s]", " ",
+                  (title or "").casefold())).strip()
 
 
-def normalize_title(value: str) -> str:
-    value = (value or "").casefold().strip()
-    value = re.sub(r"[^\w\s]", " ", value, flags=re.UNICODE)
-    return re.sub(r"\s+", " ", value).strip()
+def normalize_doi(doi: str) -> str:
+    return re.sub(r"^https?://(?:dx\.)?doi\.org/", "", (doi or "").strip().lower()).rstrip(" .;,")
 
 
-def arxiv_id_from_url(url: str) -> str:
-    path = urlparse(url).path
-    for prefix in ("/abs/", "/pdf/"):
-        if prefix in path:
-            return path.split(prefix, 1)[1].strip("/").removesuffix(".pdf")
-    return ""
+def normalized_id(value: str) -> str:
+    return (value or "").strip().rstrip("/").split("/")[-1].lower()
 
 
-def arxiv_id_base(value: str) -> str:
-    return re.sub(r"v\d+$", "", (value or "").strip(), flags=re.I)
+def hostname(url: str) -> str:
+    return (urlparse(url).hostname or "").lower()
+
+
+def domain_matches(host: str, domain: str) -> bool:
+    return host == domain or host.endswith("." + domain)
 
 
 def course_slug(url: str) -> str:
-    match = re.search(r"/courses/([^/]+)/", urlparse(url).path)
-    return match.group(1).lower() if match else ""
+    m = re.search(r"/courses/([^/]+)/", urlparse(url).path, re.I)
+    return m.group(1).lower() if m else ""
 
 
-def key_for(url: str) -> str:
-    return hashlib.sha256(url.encode("utf-8")).hexdigest()[:18]
-
-
-def acceptable_link(url: str, suffix: str) -> bool:
+def is_https(url: str) -> bool:
     p = urlparse(url)
-    return p.scheme == "https" and p.path.lower().endswith(suffix)
+    return p.scheme == "https" and bool(p.netloc) and not p.username and not p.password
 
 
-def reconstruct_abstract(work: dict) -> str:
-    inv = work.get("abstract_inverted_index") or {}
-    if not isinstance(inv, dict):
-        return ""
-    tokens = []
-    for word, positions in inv.items():
-        if isinstance(positions, list):
-            for pos in positions:
-                try:
-                    tokens.append((int(pos), str(word)))
-                except (TypeError, ValueError):
-                    pass
-    tokens.sort(key=lambda x: x[0])
-    return " ".join(word for _, word in tokens)
+def log_error(path: Path, category: str, message: str, **details) -> None:
+    append_jsonl(path, {"category": category, "error": str(message), "at": now_utc(), **details})
 
 
-class Client:
-    def __init__(self, contact: str, respect_robots: bool = True):
-        self.session = requests.Session()
-        self.session.headers.update({
-            "User-Agent": f"AcademicChemistrySourceCollector/5.2 (contact: {contact})"
-        })
-        retry = Retry(
-            total=1, connect=1, read=1, status=1,
-            backoff_factor=0.5,
-            status_forcelist=[500, 502, 503, 504],
-            respect_retry_after_header=True,
-            raise_on_status=False,
+def append_jsonl(path: Path, item: dict) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a", encoding="utf-8") as out:
+        out.write(json.dumps(item, ensure_ascii=False) + "\n")
+
+
+@dataclass(frozen=True)
+class Journal:
+    name: str
+    issn: str
+    publisher: str
+    website: str
+    group: str
+    origin: str
+    publisher_hosts: tuple[str, ...]
+
+
+def load_journals(path: Path) -> list[Journal]:
+    if not path.is_file():
+        raise FileNotFoundError(f"Journal whitelist missing: {path}")
+    data = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(data, list) or len(data) != 10:
+        raise ValueError("V6 journal whitelist must contain exactly 10 journals")
+    result = []
+    names, issns = set(), set()
+    for row in data:
+        journal = Journal(
+            name=str(row["name"]).strip(),
+            issn=str(row["issn"]).strip(),
+            publisher=str(row["publisher"]).strip(),
+            website=str(row["website"]).strip(),
+            group=str(row["group"]).strip(),
+            origin=str(row["origin"]).strip(),
+            publisher_hosts=tuple(str(x).lower() for x in row["publisher_hosts"]),
         )
-        self.session.mount("https://", HTTPAdapter(max_retries=retry))
-        self.respect_robots = respect_robots
-        self.robots: dict[str, RobotFileParser] = {}
-        self.last_hit: dict[str, float] = {}
-        self.openalex_source_cache: dict[str, dict] = {}
-
-    def _throttle(self, host: str, gap: float) -> None:
-        delta = time.monotonic() - self.last_hit.get(host, 0.0)
-        if delta < gap:
-            time.sleep(gap - delta)
-        self.last_hit[host] = time.monotonic()
-
-    def robots_allowed(self, url: str) -> bool:
-        if not self.respect_robots:
-            return True
-        p = urlparse(url)
-        origin = f"{p.scheme}://{p.netloc}"
-        if origin not in self.robots:
-            robot_url = origin + "/robots.txt"
-            try:
-                r = self.session.get(robot_url, timeout=(10, 20))
-                if r.status_code == 404:
-                    rp = RobotFileParser()
-                    rp.parse([])
-                elif r.ok:
-                    rp = RobotFileParser()
-                    rp.parse(r.text.splitlines())
-                else:
-                    raise RuntimeError(f"robots status {r.status_code}")
-                self.robots[origin] = rp
-            except requests.RequestException as exc:
-                raise RuntimeError(f"Cannot verify {robot_url}: {exc}") from exc
-        return self.robots[origin].can_fetch(
-            self.session.headers["User-Agent"], url
-        )
-
-    def get(
-        self,
-        url: str,
-        *,
-        stream: bool = False,
-        api_name: str = "",
-        timeout: tuple[int, int] | None = None,
-    ):
-        if not url.startswith("https://"):
-            raise ValueError("Only HTTPS sources are supported")
-        host = urlparse(url).netloc.lower()
-
-        if api_name:
-            # API discovery must fail fast. In particular, do not sleep for
-            # long periods after HTTP 429: the scheduler can pause only the
-            # affected source and continue with the others.
-            self._throttle(host, 1.0)
-            for attempt in range(2):
-                try:
-                    response = self.session.get(
-                        url,
-                        timeout=timeout or (8, 25),
-                        stream=stream,
-                    )
-                except requests.RequestException as exc:
-                    if attempt == 0:
-                        print(
-                            f"[WARN] {api_name} connection error; retry once in 1s.",
-                            flush=True,
-                        )
-                        time.sleep(1)
-                        continue
-                    raise SourceTemporarilyUnavailable(
-                        f"{api_name} connection failure: {exc}"
-                    ) from exc
-
-                if response.status_code == 429:
-                    response.close()
-                    raise SourceTemporarilyUnavailable(
-                        f"{api_name} HTTP 429; no long retry in this run"
-                    )
-
-                if 400 <= response.status_code < 500:
-                    body = response.text[:240].replace("\n", " ")
-                    response.close()
-                    raise SourceQueryFailed(
-                        f"{api_name} HTTP {response.status_code}: {body}"
-                    )
-
-                response.raise_for_status()
-                return response
-
-            raise SourceTemporarilyUnavailable(f"{api_name} unavailable")
-
-        if not self.robots_allowed(url):
-            raise PermissionError(f"Disallowed by robots.txt: {url}")
-
-        gap = 3.0 if "arxiv.org" in host else 1.0
-        self._throttle(host, gap)
-        response = self.session.get(
-            url,
-            timeout=timeout or ((10, 45) if stream else (10, 30)),
-            stream=stream,
-        )
-        if response.status_code == 429:
-            raise SourceTemporarilyUnavailable(f"{host} HTTP 429")
-        response.raise_for_status()
-        return response
-
-    def json(self, url: str, api_name: str) -> dict:
-        return self.get(url, api_name=api_name).json()
-
-    def html(self, url: str) -> BeautifulSoup:
-        return BeautifulSoup(self.get(url).content, "html.parser")
-
-
-def arxiv_entry_metadata(entry, ns: dict) -> dict:
-    title = " ".join(entry.findtext("a:title", "", ns).split())
-    abstract = " ".join(entry.findtext("a:summary", "", ns).split())
-    node = entry.find("ar:primary_category", ns)
-    primary = node.attrib.get("term", "") if node is not None else ""
-    page = entry.findtext("a:id", "", ns)
-    doi = entry.findtext("ar:doi", "", ns) or ""
-    return {
-        "title": title,
-        "abstract": abstract,
-        "primary_category": primary,
-        "source_page": page,
-        "arxiv_id": arxiv_id_from_url(page),
-        "doi": doi,
-    }
-
-
-def arxiv_candidates(client: Client, pool_size: int) -> Iterable[dict]:
-    ns = {
-        "a": "http://www.w3.org/2005/Atom",
-        "ar": "http://arxiv.org/schemas/atom",
-    }
-    start = 0
-    batch = 25
-
-    while start < pool_size:
-        size = min(batch, pool_size - start)
-        params = {
-            "search_query": "cat:physics.chem-ph",
-            "start": start,
-            "max_results": size,
-            "sortBy": "submittedDate",
-            "sortOrder": "descending",
-        }
-        url = ARXIV_API + "?" + urlencode(params)
-
-        try:
-            root = ET.fromstring(client.get(url, api_name="arXiv").content)
-        except SourceTemporarilyUnavailable as exc:
-            raise SourceTemporarilyUnavailable(str(exc))
-        except (requests.RequestException, ET.ParseError) as exc:
-            raise SourceTemporarilyUnavailable(f"arXiv discovery error: {exc}")
-
-        entries = root.findall("a:entry", ns)
-        if not entries:
-            return
-
-        for entry in entries:
-            meta = arxiv_entry_metadata(entry, ns)
-            pdf = ""
-            for link in entry.findall("a:link", ns):
-                href = link.attrib.get("href", "")
-                if (
-                    link.attrib.get("title") == "pdf"
-                    or link.attrib.get("type") == "application/pdf"
-                ):
-                    pdf = href
-                    break
-            if not pdf:
-                continue
-            if pdf.startswith("http://"):
-                pdf = "https://" + pdf[7:]
-            if not pdf.lower().endswith(".pdf"):
-                pdf = pdf.rstrip("/") + ".pdf"
-
-            yield {
-                "category": "papers",
-                "resource_kind": "research_article",
-                "title": meta["title"],
-                "source_page": meta["source_page"],
-                "download_url": pdf,
-                "publisher": "arXiv",
-                "journal": "",
-                "journal_issn": "",
-                "license_note": "CHECK_ARTICLE_SPECIFIC_LICENSE",
-                "published_at": entry.findtext("a:published", "", ns),
-                "doi": meta["doi"],
-                "primary_category": meta["primary_category"],
-                "abstract": meta["abstract"],
-                "arxiv_id": meta["arxiv_id"],
-                "search_query": "cat:physics.chem-ph",
-                "oa_status": "",
-                "oa_verified": True,
-                "oa_pdf_source": "arXiv public PDF endpoint",
-                "oa_verification_level": "arxiv_public_pdf_endpoint",
-                "openalex_id": "",
-                "discipline": "Chemistry",
-                "discipline_evidence": (
-                    "official arXiv primary_category=physics.chem-ph"
-                ),
-                "discipline_verification_level": "source_category",
-                "source_group": "arxiv",
-            }
-
-        start += len(entries)
-        if len(entries) < size:
-            return
-
-
-def openalex_pdf_url(
-    work: dict,
-    preferred_domains: tuple[str, ...] = (),
-) -> str:
-    """Return an OA PDF URL, preferring publisher-hosted copies when requested."""
-    locations = []
-
-    best = work.get("best_oa_location") or {}
-    if best:
-        locations.append(best)
-
-    for loc in work.get("locations") or []:
-        if loc and loc not in locations:
-            locations.append(loc)
-
-    # For Nature, prefer the publisher/CDN PDF. This avoids spending time on
-    # repository mirrors such as Research Square or ChemRxiv when a publisher
-    # copy is available.
-    if preferred_domains:
-        for loc in locations:
-            if not loc.get("is_oa") and loc is not best:
-                continue
-            pdf = (loc.get("pdf_url") or "").strip()
-            if not pdf:
-                continue
-            hosts = (
-                urlparse(pdf).netloc.lower(),
-                urlparse(str(loc.get("landing_page_url") or "")).netloc.lower(),
-            )
-            if any(
-                domain.lower() in host
-                for domain in preferred_domains
-                for host in hosts
-            ):
-                return pdf
-
-    for loc in locations:
-        if loc and loc.get("is_oa") and loc.get("pdf_url"):
-            return str(loc["pdf_url"]).strip()
-
-    return ""
-
-
-def publisher_is_chemistry(work: dict, journal: dict) -> tuple[bool, str]:
-    title = work.get("title", "") or ""
-    abstract = reconstruct_abstract(work)
-    topic_text = openalex_topic_text(work)
-    text = f"{title} {abstract} {topic_text}"
-
-    if journal["scope"] == "chemistry_core":
-        return True, (
-            f'ISSN-verified chemistry journal: {journal["name"]}'
-        )
-
-    hits = CHEMISTRY_SIGNAL.findall(text)
-    if hits:
-        return True, (
-            f'broad journal {journal["name"]} + chemistry metadata signal '
-            f"({len(hits)} match(es))"
-        )
-
-    return False, (
-        f'broad journal {journal["name"]} without chemistry signal '
-        "in title/abstract/OpenAlex topic metadata"
-    )
-
-
-def openalex_resolve_source(
-    client: Client,
-    issn: str,
-    journal_name: str,
-) -> dict:
-    """
-    Resolve a journal ISSN to its OpenAlex Source entity.
-
-    Important: ISSN is a valid identifier for the /sources endpoint, but
-    primary_location.source.issn is not a supported Works filter. The
-    correct two-step route is ISSN -> Source ID -> Works filter by
-    primary_location.source.id.
-    """
-    issn = (issn or "").strip()
-    if not issn:
-        raise SourceQueryFailed(
-            f"{journal_name}: empty ISSN in PAPER_SOURCES"
-        )
-
-    cached = client.openalex_source_cache.get(issn)
-    if cached:
-        return cached
-
-    url = f"{OPENALEX_SOURCES_API}/issn:{issn}"
-    try:
-        data = client.json(url, "OpenAlex Sources")
-    except SourceTemporarilyUnavailable:
-        raise
-    except (SourceQueryFailed, requests.RequestException, ValueError) as exc:
-        raise SourceQueryFailed(
-            f"{journal_name} ISSN {issn} source lookup failed: {exc}"
-        ) from exc
-
-    source_id = str(data.get("id") or "").rstrip("/").split("/")[-1]
-    if not source_id.startswith("S"):
-        raise SourceQueryFailed(
-            f"{journal_name} ISSN {issn}: OpenAlex returned no valid Source ID"
-        )
-
-    resolved = {
-        "id": source_id,
-        "display_name": data.get("display_name") or journal_name,
-        "issn": data.get("issn") or [],
-        "issn_l": data.get("issn_l") or "",
-        "type": data.get("type") or "",
-        "is_oa": bool(data.get("is_oa")),
-    }
-    client.openalex_source_cache[issn] = resolved
-
-    print(
-        f"[OpenAlex] {journal_name} ISSN={issn} -> source_id={source_id}",
-        flush=True,
-    )
-    return resolved
-
-
-def openalex_topic_text(work: dict) -> str:
-    parts = []
-
-    primary_topic = work.get("primary_topic")
-    if primary_topic:
-        parts.append(json.dumps(primary_topic, ensure_ascii=False))
-
-    topics = work.get("topics") or []
-    if topics:
-        parts.append(json.dumps(topics, ensure_ascii=False))
-
-    return " ".join(parts)
-
-
-def openalex_source_candidates(
-    client: Client,
-    source_group: str,
-    per_journal: int = 30,
-) -> Iterable[dict]:
-    """
-    Discover OA PDF works from the configured Nature chemistry journals.
-
-    V5.3 keeps this path deliberately simple:
-      - all configured journals are chemistry-core journals;
-      - no article-level keyword gate is required;
-      - only OA articles with a PDF location are returned;
-      - journals are queried lazily, so a successful Nature Chemistry query
-        normally satisfies the Nature quota without querying every journal.
-    """
-    cfg = PAPER_SOURCES[source_group]
-    successful_queries = 0
-    failed_queries = 0
-
-    for name, issn, journal_url, scope in cfg["journals"]:
-        try:
-            source = openalex_resolve_source(client, issn, name)
-        except SourceTemporarilyUnavailable:
-            raise
-        except SourceQueryFailed as exc:
-            failed_queries += 1
-            print(
-                f"[WARN] OpenAlex source lookup failed for {name}: {exc}; "
-                "trying the next Nature journal.",
-                flush=True,
-            )
-            continue
-
-        source_id = source["id"]
-
-        # Keep the response small. The PDF is the primary artifact; metadata
-        # here is only for provenance and later ontology preprocessing.
-        params = {
-            "filter": (
-                f"primary_location.source.id:{source_id},"
-                "open_access.is_oa:true,has_content.pdf:true,type:article"
-            ),
-            "per_page": min(50, max(10, per_journal)),
-            "sort": "publication_date:desc",
-            "select": (
-                "id,doi,title,publication_date,open_access,"
-                "best_oa_location,locations,abstract_inverted_index,"
-                "primary_location"
-            ),
-        }
-
-        url = OPENALEX_API + "?" + urlencode(params)
-
-        try:
-            data = client.json(url, "OpenAlex Works")
-        except SourceTemporarilyUnavailable:
-            raise
-        except SourceQueryFailed as exc:
-            failed_queries += 1
-            print(
-                f"[WARN] OpenAlex works query failed for {name}: {exc}; "
-                "trying the next Nature journal.",
-                flush=True,
-            )
-            continue
-        except (requests.RequestException, ValueError) as exc:
-            failed_queries += 1
-            print(
-                f"[WARN] OpenAlex works response invalid for {name}: {exc}; "
-                "trying the next Nature journal.",
-                flush=True,
-            )
-            continue
-
-        successful_queries += 1
-        results = data.get("results", [])
-        qualified_items = []
-
-        for work in results:
-            # Every configured V5.3 Nature journal is chemistry-core.
-            pdf = openalex_pdf_url(
-                work,
-                preferred_domains=(
-                    "nature.com",
-                    "media.springernature.com",
-                    "link.springer.com",
-                ),
-            )
-            if not pdf or not acceptable_link(pdf, ".pdf"):
-                continue
-
-            oa = work.get("open_access") or {}
-            best = work.get("best_oa_location") or {}
-            primary_location = work.get("primary_location") or {}
-            source_page = (
-                best.get("landing_page_url")
-                or primary_location.get("landing_page_url")
-                or ""
-            )
-            doi = normalize_doi(work.get("doi", ""))
-
-            if not source_page and doi:
-                source_page = "https://doi.org/" + doi
-            if not source_page:
-                source_page = journal_url
-
-            license_name = best.get("license") or ""
-
-            qualified_items.append({
-                "category": "papers",
-                "resource_kind": "research_article",
-                "title": " ".join((work.get("title") or "").split()),
-                "source_page": source_page,
-                "download_url": pdf,
-                "publisher": cfg["publisher"],
-                "journal": name,
-                "journal_issn": issn,
-                "license_note": (
-                    license_name
-                    or "OA_REPORTED_BY_OPENALEX_CHECK_ARTICLE_LICENSE"
-                ),
-                "published_at": work.get("publication_date") or "",
-                "doi": doi,
-                "primary_category": "",
-                "abstract": reconstruct_abstract(work),
-                "arxiv_id": "",
-                "search_query": (
-                    f"OpenAlex primary_location.source.id:{source_id}"
-                ),
-                "oa_status": oa.get("oa_status", ""),
-                "oa_verified": bool(oa.get("is_oa")) and bool(pdf),
-                "oa_pdf_source": "OpenAlex best_oa_location.pdf_url",
-                "oa_verification_level": (
-                    "openalex_oa+direct_pdf"
-                    + ("+license_metadata" if license_name else "")
-                ),
-                "openalex_id": work.get("id", ""),
-                "openalex_source_id": source_id,
-                "discipline": "Chemistry",
-                "chemistry_verified": True,
-                "discipline_evidence": (
-                    f"ISSN-verified chemistry journal: {name}"
-                ),
-                "discipline_verification_level": (
-                    "chemistry_core_journal+openalex_oa_pdf"
-                ),
-                "source_group": source_group,
-            })
-
-        print(
-            f"[OpenAlex] {name}: {len(results)} OA/PDF candidates; "
-            f"{len(qualified_items)} chemistry-qualified",
-            flush=True,
-        )
-
-        for item in qualified_items:
-            yield item
-
-    if successful_queries == 0 and failed_queries > 0:
-        raise SourceQueryFailed(
-            f"{source_group}: all configured OpenAlex journal queries failed"
-        )
-
-
-def paper_identity_keys(item: dict) -> list[str]:
-    """Return all known identity keys; using all keys catches cross-source copies."""
-    keys = []
-
-    doi = normalize_doi(item.get("doi", ""))
-    if doi:
-        keys.append("doi:" + doi)
-
-    aid = arxiv_id_base(item.get("arxiv_id", ""))
-    if aid:
-        keys.append("arxiv:" + aid)
-
-    oid = (item.get("openalex_id") or "").strip().lower()
-    if oid:
-        keys.append("openalex:" + oid)
-
-    title = normalize_title(item.get("title", ""))
-    if title:
-        keys.append("title:" + title)
-
-    url = (item.get("download_url") or "").strip().lower()
-    if url:
-        keys.append("url:" + url)
-
-    return keys
-
-
-def load_manifest(manifest: Path, root: Path) -> list[dict]:
-    records = []
-    if not manifest.exists():
-        return records
-
-    for line in manifest.read_text(encoding="utf-8").splitlines():
-        try:
-            item = json.loads(line)
-            rel = item.get("file", "")
-            if (
-                item.get("status") == "downloaded"
-                and rel
-                and (root / rel).is_file()
-            ):
-                records.append(item)
-        except (ValueError, OSError):
-            continue
-    return records
-
-
-def build_global_dedup(records: list[dict]) -> set[str]:
-    index = set()
-    for record in records:
-        index.update(paper_identity_keys(record))
-        sha = (record.get("sha256") or "").strip().lower()
-        if sha:
-            index.add("sha256:" + sha)
-    return index
-
-
-def classify_candidate(item: dict) -> tuple[str, str]:
-    cat = item.get("category", "")
-    title = item.get("title", "")
-    abstract = item.get("abstract", "")
-
-    if cat == "papers":
-        primary = (item.get("primary_category") or "").strip()
-        if primary == "physics.chem-ph":
-            return "accepted", (
-                "official arXiv primary_category=physics.chem-ph"
-            )
-
-        # V5.3 Nature records are verified at the journal level. This is
-        # intentionally broader and faster than article-level screening.
-        if item.get("chemistry_verified") is True:
-            return "accepted", (
-                item.get("discipline_evidence")
-                or "chemistry-core journal evidence"
-            )
-
-        chemistry_journals = {
-            name
-            for name, _, _, scope in PAPER_SOURCES["nature"]["journals"]
-            if scope == "chemistry_core"
-        }
-        if item.get("journal") in chemistry_journals:
-            return "accepted", (
-                f'ISSN-verified chemistry journal: {item["journal"]}'
-            )
-
-        if item.get("oa_verified") and CHEMISTRY_SIGNAL.search(
-            f"{title} {abstract}"
-        ):
-            return "accepted", (
-                "OA metadata + chemistry signal in title/abstract"
-            )
-
-        # Historical arXiv records without persisted primary_category.
-        if (
-            item.get("search_query") == "cat:physics.chem-ph"
-            or item.get("source_group") == "arxiv"
-            or (
-                "arxiv.org" in item.get("source_page", "")
-                and arxiv_id_from_url(item.get("source_page", ""))
-            )
-        ):
-            return "likely_chemistry", (
-                "historical arXiv chemistry source evidence; "
-                "primary_category not independently verified"
-            )
-
-        return "rejected", "insufficient chemistry verification evidence"
-
-    if cat in ("videos", "teaching"):
-        slug = course_slug(item.get("source_page", ""))
-        if slug not in MIT_CHEMISTRY_SLUGS:
-            return "rejected", "not a whitelisted MIT chemistry course"
-        if VIDEO_NON_CHEMICAL_TOPIC.search(title):
-            return "rejected", "clearly non-chemistry lesson topic"
-        return "accepted", "MIT chemistry course-level evidence"
-
-    if cat == "methods":
-        if "/hw-sw846/sw-846-test-method-" in item.get("source_page", ""):
-            return "accepted", "EPA SW-846 analytical method source"
-        return "needs_review", "outside EPA SW-846 method catalog"
-
-    if cat == "textbooks":
-        if CHEMISTRY_BOOK_TITLE.search(title):
-            return "accepted", "chemistry shown in textbook title"
-        return "needs_review", "title does not establish chemistry subject"
-
-    return "needs_review", "unknown category"
-
-
-def parse_source_targets(spec: str, sources: list[str], total: int) -> dict[str, int]:
-    if not spec.strip():
-        base, remainder = divmod(total, len(sources))
-        return {
-            s: base + (1 if i < remainder else 0)
-            for i, s in enumerate(sources)
-        }
-
-    result = {s: 0 for s in sources}
-    fixed = set()
-
-    for token in spec.split(","):
-        if "=" not in token:
-            raise ValueError(f"Bad --source-targets item: {token}")
-        source, raw = token.split("=", 1)
-        source = source.strip()
-        if source not in result:
-            raise ValueError(f"Source {source} not in --paper-sources")
-        result[source] = max(0, int(raw))
-        fixed.add(source)
-
-    specified = sum(result.values())
-    if specified > total:
-        raise ValueError("--source-targets sum exceeds remaining target")
-
-    remaining = total - specified
-    free = [s for s in sources if s not in fixed]
-
-    if free:
-        base, remainder = divmod(remaining, len(free))
-        for i, source in enumerate(free):
-            result[source] = base + (1 if i < remainder else 0)
-    elif remaining:
-        # All sources were explicitly listed but their sum is below the target.
-        # Distribute the remainder to the currently smallest quota.
-        for _ in range(remaining):
-            source = min(sources, key=lambda s: result[s])
-            result[source] += 1
-
+        if not re.fullmatch(r"\d{4}-[\dX]{4}", journal.issn, re.I):
+            raise ValueError(f"Invalid ISSN: {journal.name}: {journal.issn}")
+        if not journal.name or not is_https(journal.website) or not journal.publisher_hosts:
+            raise ValueError(f"Invalid whitelist entry: {journal.name}")
+        if journal.name.casefold() in names or journal.issn in issns:
+            raise ValueError(f"Duplicate whitelist journal/ISSN: {journal.name}")
+        names.add(journal.name.casefold())
+        issns.add(journal.issn)
+        result.append(journal)
     return result
 
 
-def redistribute_quota(
-    quotas: Counter,
-    sources: list[str],
-    unavailable_source: str,
-    unused: int,
-    disabled: set[str],
-    exhausted: set[str],
-) -> None:
-    if unused <= 0:
-        return
-
-    receivers = [
-        s for s in sources
-        if s != unavailable_source
-        and s not in disabled
-        and s not in exhausted
-    ]
-    if not receivers:
-        return
-
-    # Give one slot at a time to the source with the smallest current
-    # remaining quota. This keeps redistribution as balanced as possible.
-    for _ in range(unused):
-        receiver = min(
-            receivers,
-            key=lambda s: (
-                quotas[s],
-                sources.index(s),
-            ),
-        )
-        quotas[receiver] += 1
+class SourceError(RuntimeError):
+    pass
 
 
-def balanced_paper_candidates(
-    client: Client,
-    sources: list[str],
-    total_needed: int,
-    source_targets: dict[str, int],
-    dedup_keys: set[str],
-    success_counts: Counter,
-) -> Iterable[dict]:
-    """
-    Two-source round-robin scheduler for arXiv + Nature.
+class Client:
+    """No login, session cookies, paywall workaround or other auth workflow."""
 
-    Quotas represent successful unique downloads, not candidates emitted:
-      - identity duplicates do not consume quota;
-      - SHA-256 duplicates do not consume quota;
-      - download failures do not consume quota;
-      - an unavailable/exhausted source redistributes its unmet quota.
-    """
-    iterators = {}
+    def __init__(self, contact: str = "", respect_robots: bool = True):
+        self.session = requests.Session()
+        agent = "AcademicChemistrySourceCollector/6.0"
+        if contact.strip():
+            agent += f" (contact: {contact.strip()})"
+        self.session.headers.update({"User-Agent": agent, "Accept": "application/json, application/pdf, */*"})
+        self.respect_robots = respect_robots
+        self.robot_parsers: dict[str, RobotFileParser] = {}
+        self.last_request: dict[str, float] = {}
 
-    if "arxiv" in sources:
-        iterators["arxiv"] = iter(
-            arxiv_candidates(
-                client,
-                pool_size=max(50, total_needed * 6),
-            )
-        )
+    def wait(self, url: str) -> None:
+        host = hostname(url)
+        gap = 1.0
+        delta = time.monotonic() - self.last_request.get(host, 0.0)
+        if delta < gap:
+            time.sleep(gap - delta)
+        self.last_request[host] = time.monotonic()
 
-    if "nature" in sources:
-        iterators["nature"] = iter(
-            openalex_source_candidates(
-                client,
-                "nature",
-                per_journal=30,
-            )
-        )
-
-    quotas = Counter(source_targets)
-    disabled: set[str] = set()
-    exhausted: set[str] = set()
-    discovered = Counter()
-    cursor = 0
-    attempts = 0
-    max_attempts = max(100, total_needed * 30)
-
-    print(
-        "[papers] initial balanced quotas: "
-        + ", ".join(f"{s}={quotas[s]}" for s in sources),
-        flush=True,
-    )
-
-    while (
-        sum(success_counts[s] for s in sources) < total_needed
-        and attempts < max_attempts
-    ):
-        active = [
-            s for s in sources
-            if s not in disabled
-            and s not in exhausted
-            and success_counts[s] < quotas[s]
-        ]
-        if not active:
-            break
-
-        chosen = None
-        for step in range(len(sources)):
-            idx = (cursor + step) % len(sources)
-            source = sources[idx]
-            if source in active:
-                chosen = source
-                cursor = (idx + 1) % len(sources)
-                break
-
-        if chosen is None:
-            break
-
-        source = chosen
-        attempts += 1
-
-        try:
-            item = next(iterators[source])
-        except StopIteration:
-            unused = max(0, quotas[source] - success_counts[source])
-            exhausted.add(source)
-            quotas[source] = success_counts[source]
-            print(
-                f"[papers] source exhausted: {source}; "
-                f"redistributing unmet quota={unused}.",
-                flush=True,
-            )
-            redistribute_quota(
-                quotas, sources, source, unused, disabled, exhausted
-            )
-            continue
-        except SourceTemporarilyUnavailable as exc:
-            unused = max(0, quotas[source] - success_counts[source])
-            disabled.add(source)
-            quotas[source] = success_counts[source]
-            print(
-                f"[WARN] {source} temporarily unavailable: {exc}. "
-                f"Pausing only this source; redistributing quota={unused}.",
-                flush=True,
-            )
-            redistribute_quota(
-                quotas, sources, source, unused, disabled, exhausted
-            )
-            continue
-        except SourceQueryFailed as exc:
-            unused = max(0, quotas[source] - success_counts[source])
-            disabled.add(source)
-            quotas[source] = success_counts[source]
-            print(
-                f"[WARN] {source} query failed: {exc}. "
-                f"Pausing only this source; redistributing quota={unused}.",
-                flush=True,
-            )
-            redistribute_quota(
-                quotas, sources, source, unused, disabled, exhausted
-            )
-            continue
-        except Exception as exc:
-            unused = max(0, quotas[source] - success_counts[source])
-            disabled.add(source)
-            quotas[source] = success_counts[source]
-            print(
-                f"[WARN] {source} discovery error: {exc}. "
-                f"Pausing only this source; redistributing quota={unused}.",
-                flush=True,
-            )
-            redistribute_quota(
-                quotas, sources, source, unused, disabled, exhausted
-            )
-            continue
-
-        discovered[source] += 1
-
-        keys = paper_identity_keys(item)
-        duplicate_key = next(
-            (key for key in keys if key in dedup_keys),
-            None,
-        )
-        if duplicate_key:
-            print(
-                f'[DUP] {source}: {item.get("title", "")[:90]} '
-                f'| {duplicate_key}',
-                flush=True,
-            )
-            continue
-
-        # Reserve the identity during this run. Success is counted only after
-        # the file is downloaded and passes SHA-256 de-duplication.
-        dedup_keys.update(keys)
-        yield item
-
-    if attempts >= max_attempts:
-        print(
-            f"[WARN] paper scheduler reached safety attempt limit "
-            f"{max_attempts}; stopping without fabricating files.",
-            flush=True,
-        )
-
-    print(
-        "[papers] scheduler candidates discovered: "
-        + ", ".join(f"{s}={discovered[s]}" for s in sources),
-        flush=True,
-    )
-    print(
-        "[papers] scheduler successful downloads: "
-        + ", ".join(f"{s}={success_counts[s]}" for s in sources),
-        flush=True,
-    )
-
-
-def mit_candidates(client: Client, category: str) -> Iterable[dict]:
-    endpoint = "lecture-videos" if category == "videos" else "lecture-notes"
-    suffix = ".mp4" if category == "videos" else ".pdf"
-    visited = set()
-
-    for root in MIT_COURSES:
-        pages = [
-            urljoin(root, "resources/" + endpoint + "/"),
-            urljoin(root, "download/"),
-        ]
-
-        for page in pages:
+    def allowed(self, url: str) -> bool:
+        if not self.respect_robots:
+            return True
+        parsed = urlparse(url)
+        origin = f"{parsed.scheme}://{parsed.netloc}"
+        if origin not in self.robot_parsers:
+            robots_url = origin + "/robots.txt"
             try:
-                soup = client.html(page)
-            except Exception as exc:
-                print(f"[WARN] MIT source page {page}: {exc}", flush=True)
-                continue
+                response = self.session.get(robots_url, timeout=(8, 15))
+                if response.status_code == 404:
+                    parser = RobotFileParser()
+                    parser.parse([])
+                elif response.ok:
+                    parser = RobotFileParser()
+                    parser.parse(response.text.splitlines())
+                else:
+                    raise SourceError(f"robots.txt verification HTTP {response.status_code}: {robots_url}")
+                self.robot_parsers[origin] = parser
+            except requests.RequestException as exc:
+                raise SourceError(f"Cannot verify robots.txt for {origin}: {exc}") from exc
+        return self.robot_parsers[origin].can_fetch(self.session.headers["User-Agent"], url)
 
-            for anchor in soup.select("a[href]"):
-                url = urljoin(page, anchor.get("href", ""))
-
-                if not acceptable_link(url, suffix) or url in visited:
-                    continue
-
-                host = urlparse(url).hostname or ""
-                if category == "videos" and not host.endswith("archive.org"):
-                    continue
-                if category == "teaching" and not host.endswith("ocw.mit.edu"):
-                    continue
-
-                visited.add(url)
-                stem = Path(urlparse(url).path).stem
-                label = anchor.get_text(" ", strip=True)
-
-                yield {
-                    "category": category,
-                    "resource_kind": (
-                        "course_video"
-                        if category == "videos"
-                        else "lecture_notes"
-                    ),
-                    "title": (
-                        f'{root.rstrip("/").split("/")[-1]} - '
-                        f"{stem} - {label}"
-                    )[:240],
-                    "source_page": page,
-                    "download_url": url,
-                    "publisher": "MIT OpenCourseWare",
-                    "license_note": (
-                        "MIT_OCW_CC_BY_NC_SA_4_0_CHECK_THIRD_PARTY_NOTICES"
-                    ),
-                    "published_at": "",
-                    "doi": "",
-                }
-
-
-def method_candidates(client: Client) -> Iterable[dict]:
-    soup = client.html(EPA_INDEX)
-    seen_pages = set()
-
-    for anchor in soup.select("a[href]"):
-        page = urljoin(EPA_INDEX, anchor.get("href", ""))
-        p = urlparse(page)
-
-        if (
-            p.hostname != "www.epa.gov"
-            or "/hw-sw846/sw-846-test-method-" not in p.path
-            or page in seen_pages
-        ):
-            continue
-
-        seen_pages.add(page)
-
+    def get(self, url: str, *, api: bool = False, stream: bool = False):
+        if not is_https(url):
+            raise SourceError("Only HTTPS links are allowed")
+        if not api and not self.allowed(url):
+            raise SourceError(f"Disallowed by robots.txt: {url}")
+        self.wait(url)
         try:
-            detail = client.html(page)
-        except Exception as exc:
-            print(f"[WARN] EPA method page {page}: {exc}", flush=True)
+            response = self.session.get(url, timeout=(10, 40), stream=stream,
+                                        allow_redirects=True)
+        except requests.RequestException as exc:
+            raise SourceError(str(exc)) from exc
+        if not is_https(response.url):
+            response.close()
+            raise SourceError("Download redirects to a non-HTTPS URL")
+        if not response.ok:
+            status = response.status_code
+            response.close()
+            raise SourceError(f"HTTP {status} for {url}")
+        # Publishers can redirect an OA URL to a login / access wall.
+        if not api and re.search(r"/(?:login|signin|authenticate)(?:[/?]|$)", urlparse(response.url).path, re.I):
+            response.close()
+            raise SourceError("Redirected to an authentication page")
+        return response
+
+    def json(self, url: str) -> dict:
+        with self.get(url, api=True) as response:
+            try:
+                result = response.json()
+                if not isinstance(result, dict):
+                    raise ValueError("Response is not a JSON object")
+                return result
+            except ValueError as exc:
+                raise SourceError(f"Invalid API JSON: {exc}") from exc
+
+    def html(self, url: str) -> BeautifulSoup:
+        with self.get(url) as response:
+            return BeautifulSoup(response.content, "html.parser")
+
+
+def resolve_openalex_source(client: Client, journal: Journal) -> str:
+    data = client.json(f"{OPENALEX_SOURCES}/issn:{journal.issn}")
+    issn_set = set(data.get("issn") or [])
+    if data.get("issn_l"):
+        issn_set.add(data["issn_l"])
+    if journal.issn not in issn_set:
+        raise SourceError(f"ISSN mismatch for {journal.name}: OpenAlex returned {sorted(issn_set)}")
+    source_id = normalized_id(str(data.get("id") or "")).upper()
+    if not re.fullmatch(r"S\d+", source_id):
+        raise SourceError(f"Invalid OpenAlex Source ID for {journal.name}: {source_id}")
+    return source_id
+
+
+def candidate_pdf_locations(work: dict, journal: Journal, source_id: str) -> list[dict]:
+    """Publisher OA PDF first; repository accepted/published copy as fallback.
+
+    A preprint-hosted PDF is *not* a journal-published PDF. Exclude known
+    preprint servers even if OpenAlex links that version to the journal work.
+    """
+    locations = [work.get("primary_location"), work.get("best_oa_location")]
+    locations += work.get("locations") or []
+    selected = []
+    seen = set()
+    for location in locations:
+        if not isinstance(location, dict) or not location.get("is_oa"):
             continue
-
-        name = (
-            detail.h1.get_text(" ", strip=True)
-            if detail.h1
-            else anchor.get_text(" ", strip=True)
-        )
-
-        for a in detail.select("a[href]"):
-            pdf = urljoin(page, a.get("href", ""))
-            if (
-                acceptable_link(pdf, ".pdf")
-                and (urlparse(pdf).hostname or "").endswith("epa.gov")
-            ):
-                yield {
-                    "category": "methods",
-                    "resource_kind": "analytical_test_method",
-                    "title": name,
-                    "source_page": page,
-                    "download_url": pdf,
-                    "publisher": "US EPA",
-                    "license_note": (
-                        "US_GOV_WORK_CHECK_THIRD_PARTY_MATERIAL_AND_CURRENT_STATUS"
-                    ),
-                    "published_at": "",
-                    "doi": "",
-                }
-                break
-
-
-def textbook_candidates(seed_file: Path) -> Iterable[dict]:
-    if not seed_file.exists():
-        print(
-            f"[INFO] No optional book seed file at {seed_file}",
-            flush=True,
-        )
-        return
-
-    with seed_file.open(encoding="utf-8-sig", newline="") as f:
-        for row in csv.DictReader(f):
-            url = (row.get("download_url") or "").strip()
-            if not acceptable_link(url, ".pdf"):
-                continue
-
-            yield {
-                "category": "textbooks",
-                "resource_kind": "whole_textbook",
-                "title": row.get("title", ""),
-                "source_page": row.get("source_page", ""),
-                "download_url": url,
-                "publisher": row.get("publisher", ""),
-                "license_note": row.get(
-                    "license_note", "LICENSE_REVIEW_REQUIRED"
-                ),
-                "published_at": row.get("published_at", ""),
-                "doi": "",
-            }
+        url = str(location.get("pdf_url") or "").strip()
+        if not is_https(url) or url in seen:
+            continue
+        host = hostname(url)
+        landing = str(location.get("landing_page_url") or "")
+        landing_host = hostname(landing)
+        if any(domain_matches(host, h) or domain_matches(landing_host, h)
+               for h in BLOCKED_PDF_HOSTS):
+            continue
+        version = location.get("version") or "unknown"
+        publisher_host = any(domain_matches(host, h) for h in journal.publisher_hosts)
+        source = location.get("source") or {}
+        publisher_source = normalized_id(str(source.get("id") or "")) == source_id.lower()
+        # A repository copy must be published or accepted, not an unverified
+        # or submitted preprint, to keep the corpus journal-oriented.
+        if not (publisher_host or publisher_source) and version not in {"publishedVersion", "acceptedVersion"}:
+            continue
+        seen.add(url)
+        selected.append({
+            "url": url,
+            "version": version,
+            "landing_page": landing,
+            "license": str(location.get("license") or ""),
+            "oa_host": host,
+            "publisher_pdf": bool(publisher_host or publisher_source),
+            "repository_fallback": not (publisher_host or publisher_source),
+        })
+    selected.sort(key=lambda loc: (
+        not loc["publisher_pdf"],
+        loc["version"] not in {"publishedVersion"},
+        loc["version"] not in {"acceptedVersion"},
+    ))
+    return selected
 
 
-def signature_ok(path: Path, ext: str) -> bool:
-    header = path.read_bytes()[:16]
+def article_candidate(work: dict, journal: Journal, source_id: str) -> tuple[dict | None, str]:
+    if work.get("type") != "article":
+        return None, "not an article"
+    if work.get("is_retracted") or work.get("is_paratext"):
+        return None, "retracted or paratext"
+    title = " ".join(str(work.get("title") or "").split())
+    if not title or EXCLUDED_ARTICLE_TITLES.search(title):
+        return None, "correction/editorial/non-research title"
+    if not (work.get("open_access") or {}).get("is_oa"):
+        return None, "not OA according to OpenAlex"
+    primary = work.get("primary_location") or {}
+    actual_source = normalized_id(str((primary.get("source") or {}).get("id") or ""))
+    if actual_source != source_id.lower():
+        return None, "primary journal source does not match whitelist ISSN"
+    doi = normalize_doi(str(work.get("doi") or ""))
+    if not doi:
+        return None, "missing DOI; cannot verify published article identity"
+    locations = candidate_pdf_locations(work, journal, source_id)
+    if not locations:
+        return None, "OA work has no acceptable HTTPS PDF location"
+    landing = str(primary.get("landing_page_url") or "").strip()
+    article_page = landing if is_https(landing) else "https://doi.org/" + doi
+    oa = work.get("open_access") or {}
+    return {
+        "category": "papers", "resource_kind": "research_article",
+        "title": title, "journal": journal.name, "journal_issn": journal.issn,
+        "journal_group": journal.group, "journal_whitelist_origin": journal.origin,
+        "publisher": journal.publisher, "source_group": "top10_journals",
+        "source_page": article_page, "doi": doi,
+        "openalex_id": str(work.get("id") or ""),
+        "openalex_source_id": source_id,
+        "published_at": str(work.get("publication_date") or ""),
+        "oa_verified": True, "oa_status": str(oa.get("oa_status") or ""),
+        "discipline": "Chemistry",
+        "discipline_evidence": f"ISSN-verified journal whitelist: {journal.name}",
+        "discipline_verification_level": "source_issn+primary_journal_id",
+        "article_filter": "type=article, OA=true, non-retracted, DOI present",
+        "pdf_locations": locations,
+    }, "accepted"
 
+
+def journal_article_iterator(client: Client, journal: Journal, per_page: int, pages: int,
+                             error_path: Path) -> Iterator[dict]:
+    source_id = resolve_openalex_source(client, journal)
+    print(f"[OpenAlex] {journal.name}: ISSN={journal.issn} -> {source_id}", flush=True)
+    for page in range(1, pages + 1):
+        params = {
+            "filter": (f"primary_location.source.id:{source_id},"
+                       "open_access.is_oa:true,type:article,is_retracted:false"),
+            "sort": "publication_date:desc",
+            "page": page,
+            "per_page": per_page,
+            "select": ("id,doi,title,type,publication_date,open_access,"
+                       "primary_location,best_oa_location,locations,"
+                       "is_retracted,is_paratext"),
+        }
+        url = OPENALEX_WORKS + "?" + urlencode(params)
+        data = client.json(url)
+        results = data.get("results")
+        if not isinstance(results, list):
+            raise SourceError(f"Invalid OpenAlex works response: {journal.name}, page={page}")
+        qualified = 0
+        for work in results:
+            try:
+                candidate, reason = article_candidate(work, journal, source_id)
+                if candidate:
+                    qualified += 1
+                    yield candidate
+            except (TypeError, AttributeError, ValueError) as exc:
+                log_error(error_path, "papers", f"Bad article metadata: {exc}",
+                          journal=journal.name, openalex_id=work.get("id", "") if isinstance(work, dict) else "")
+        print(f"[DISCOVER] {journal.name} page={page}: works={len(results)} eligible_pdf={qualified}", flush=True)
+        if len(results) < per_page:
+            break
+
+
+def identity_keys(item: dict) -> set[str]:
+    keys = set()
+    doi = normalize_doi(str(item.get("doi") or ""))
+    if doi:
+        keys.add("doi:" + doi)
+    openalex = normalized_id(str(item.get("openalex_id") or ""))
+    if openalex:
+        keys.add("openalex:" + openalex)
+    title = normalized_title(str(item.get("title") or ""))
+    if title:
+        keys.add("title:" + title)
+    url = str(item.get("download_url") or "").strip().lower()
+    if url:
+        keys.add("url:" + url)
+    for location in item.get("pdf_locations") or []:
+        candidate_url = str(location.get("url") or "").strip().lower()
+        if candidate_url:
+            keys.add("url:" + candidate_url)
+    return keys
+
+
+def load_existing_records(root: Path, *, category: str,
+                          permitted_journals: set[str] | None = None) -> list[dict]:
+    manifest = root / "manifest.jsonl"
+    if not manifest.is_file():
+        return []
+    records = []
+    for line_num, raw in enumerate(manifest.read_text(encoding="utf-8").splitlines(), 1):
+        if not raw.strip():
+            continue
+        try:
+            row = json.loads(raw)
+        except ValueError as exc:
+            raise RuntimeError(f"Bad manifest JSON on line {line_num}: {exc}") from exc
+        if row.get("category") != category or row.get("status") != "downloaded":
+            continue
+        if permitted_journals is not None and row.get("journal") not in permitted_journals:
+            raise RuntimeError(
+                f"Existing manifest contains a non-V6 journal record: {row.get('journal')!r}. "
+                "Use an empty V6 output folder; the program will NOT erase legacy data."
+            )
+        rel = Path(str(row.get("file") or ""))
+        if not rel.parts or rel.is_absolute() or ".." in rel.parts:
+            raise RuntimeError(f"Unsafe manifest path on line {line_num}: {rel}")
+        path = root / rel
+        if not path.is_file() or path.stat().st_size != row.get("bytes"):
+            print(f"[WARN] Missing/size-mismatched old file, not counted: {rel}", flush=True)
+            continue
+        if not re.fullmatch(r"[a-f0-9]{64}", str(row.get("sha256") or ""), re.I):
+            raise RuntimeError(f"Manifest missing valid SHA-256 on line {line_num}")
+        records.append(row)
+    return records
+
+
+def file_signature_ok(first_bytes: bytes, ext: str) -> bool:
     if ext == ".pdf":
-        return header.startswith(b"%PDF-")
+        return first_bytes.startswith(b"%PDF-")
     if ext == ".mp4":
-        return header[4:8] == b"ftyp"
-    if ext == ".webm":
-        return header.startswith(b"\x1a\x45\xdf\xa3")
+        return len(first_bytes) >= 8 and first_bytes[4:8] == b"ftyp"
     if ext == ".docx":
-        return header.startswith(b"PK\x03\x04")
-    if ext == ".doc":
-        return header.startswith(b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1")
-
+        return first_bytes.startswith(b"PK\x03\x04")
     return False
 
 
-def download_one(
-    client: Client,
-    item: dict,
-    root: Path,
-    max_mb: int,
-) -> dict:
-    url = item["download_url"]
-    ext = Path(urlparse(url).path).suffix.lower()
+def download_file(client: Client, item: dict, root: Path, *, url: str,
+                  ext: str, max_file_mb: int, seen_sha: set[str]) -> tuple[str, dict | None]:
+    """Stream to .part; verify magic bytes; SHA check before atomic rename.
 
-    if ext not in MIME:
-        raise ValueError("Unsupported source extension: " + ext)
-
+    Returns downloaded/sha_duplicate and the new record (if downloaded).
+    """
+    if not is_https(url):
+        raise SourceError(f"Non-HTTPS download: {url}")
     folder = root / "raw" / item["category"]
     folder.mkdir(parents=True, exist_ok=True)
-
-    target = folder / f'{item["category"]}_{key_for(url)}{ext}'
-    part = target.with_suffix(target.suffix + ".part")
-    max_bytes = max_mb * 1024 * 1024
-
-    sha = hashlib.sha256()
+    name = f"{item['category']}_{hashlib.sha256(url.encode('utf-8')).hexdigest()[:20]}{ext}"
+    target = folder / name
+    tmp = folder / (name + ".part")
+    limit = max_file_mb * 1024 * 1024
     total = 0
-
+    sha = hashlib.sha256()
+    first = bytearray()
     try:
         with client.get(url, stream=True) as response:
-            length = int(response.headers.get("Content-Length", "0") or 0)
-            if length > max_bytes:
-                raise ValueError(f"Over {max_mb}MB per-file limit")
-
-            content_type = (
-                response.headers.get("Content-Type", "")
-                .split(";")[0]
-                .lower()
-            )
-            if content_type in {"text/html", "application/json"}:
-                raise ValueError(
-                    "Got HTML/JSON instead of an original media file"
-                )
-
-            with part.open("wb") as f:
-                for chunk in response.iter_content(
-                    chunk_size=1024 * 256
-                ):
+            content_type = response.headers.get("Content-Type", "").split(";")[0].lower().strip()
+            if content_type in {"text/html", "application/json", "text/plain", "application/xml"}:
+                raise SourceError(f"Not a PDF/media response: {content_type}")
+            clen = int(response.headers.get("Content-Length", "0") or 0)
+            if clen > limit:
+                raise SourceError(f"File exceeds {max_file_mb} MB limit")
+            with tmp.open("wb") as dest:
+                for chunk in response.iter_content(chunk_size=256 * 1024):
                     if not chunk:
                         continue
-
+                    if len(first) < 16:
+                        first.extend(chunk[:16 - len(first)])
                     total += len(chunk)
-                    if total > max_bytes:
-                        raise ValueError(
-                            f"Exceeded {max_mb}MB per-file limit"
-                        )
-
-                    f.write(chunk)
+                    if total > limit:
+                        raise SourceError(f"File exceeds {max_file_mb} MB limit")
+                    dest.write(chunk)
                     sha.update(chunk)
+        if total < 1024 or not file_signature_ok(bytes(first), ext):
+            raise SourceError(f"Downloaded content is not a valid {ext} file signature")
+        digest = sha.hexdigest()
+        if digest in seen_sha:
+            return "sha_duplicate", None
+        if target.exists():
+            # Avoid replacing an unexpected existing file with the same
+            # URL-derived name; allow recovery of a verified orphan file if
+            # the previous run wrote it but crashed before manifest append.
+            existing_digest = hash_file(target)
+            if existing_digest != digest:
+                raise SourceError(f"Output filename collision with different file: {target}")
+        else:
+            tmp.replace(target)
+        record = {k: v for k, v in item.items() if k != "pdf_locations"}
+        record.update({
+            "download_url": url, "file": str(target.relative_to(root)),
+            "bytes": total, "sha256": digest,
+            "mime_expected": MIME[ext], "collected_at": now_utc(),
+            "status": "downloaded", "collector_version": "6.0",
+        })
+        return "downloaded", record
+    finally:
+        tmp.unlink(missing_ok=True)
 
-        if not signature_ok(part, ext):
-            raise ValueError(f"File signature does not match {ext}")
 
-        part.replace(target)
-
-        return {
-            **item,
-            "file": str(target.relative_to(root)),
-            "bytes": total,
-            "sha256": sha.hexdigest(),
-            "mime_expected": MIME[ext],
-            "collected_at": utc_now(),
-            "status": "downloaded",
-        }
-
-    except Exception:
-        part.unlink(missing_ok=True)
-        raise
+def hash_file(path: Path) -> str:
+    sha = hashlib.sha256()
+    with path.open("rb") as file:
+        for chunk in iter(lambda: file.read(1024 * 1024), b""):
+            sha.update(chunk)
+    return sha.hexdigest()
 
 
-def save_jsonl(path: Path, item: dict) -> None:
+def append_csv(path: Path, item: dict, fieldnames: list[str]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("a", encoding="utf-8") as f:
-        f.write(json.dumps(item, ensure_ascii=False) + "\n")
+    new = not path.exists() or path.stat().st_size == 0
+    with path.open("a", encoding="utf-8-sig", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=fieldnames, extrasaction="ignore")
+        if new:
+            writer.writeheader()
+        writer.writerow(item)
 
 
-def save_csv(path: Path, rows: list[dict]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
+PAPER_AUDIT_COLUMNS = [
+    "at", "journal", "journal_issn", "title", "doi", "openalex_id",
+    "source_page", "download_url", "oa_status", "oa_version", "oa_pdf_host",
+    "filter_status", "filter_reason",
+]
 
-    columns = [
-        "category", "resource_kind", "title", "publisher",
-        "source_page", "download_url", "license_note", "published_at",
-        "doi", "primary_category", "abstract", "arxiv_id",
-        "search_query", "discipline", "discipline_evidence",
-        "discipline_verification_level", "journal", "journal_issn",
-        "oa_status", "oa_verified", "oa_pdf_source", "openalex_id",
-        "openalex_source_id",
-        "oa_verification_level", "chemistry_verified", "source_group",
-        "filter_status",
-        "filter_reason", "duplicate_key",
-    ]
 
-    with path.open(
-        "w", encoding="utf-8-sig", newline=""
-    ) as f:
-        writer = csv.DictWriter(
-            f, fieldnames=columns, extrasaction="ignore"
-        )
-        writer.writeheader()
-        writer.writerows(rows)
+def paper_audit(path: Path, item: dict, status: str, reason: str = "") -> None:
+    append_csv(path, {"at": now_utc(), **item, "filter_status": status,
+                      "filter_reason": reason}, PAPER_AUDIT_COLUMNS)
 
 
 def collect_papers(client: Client, args, root: Path) -> None:
-    manifest = root / "manifest.jsonl"
-    errors = root / "errors.jsonl"
-
-    old = load_manifest(manifest, root)
-    old_papers = [
-        r for r in old
-        if r.get("category") == "papers"
-    ]
-
-    # Preserve all existing chemistry-relevant papers. Historical arXiv
-    # records without complete metadata are still counted by source evidence.
-    chemistry_old = []
-    for record in old_papers:
-        status, _ = classify_candidate(record)
-        if status == "accepted":
-            chemistry_old.append(record)
-        elif (
-            record.get("primary_category") == "physics.chem-ph"
-            or record.get("search_query") == "cat:physics.chem-ph"
-            or "arxiv.org" in record.get("source_page", "")
-        ):
-            chemistry_old.append(record)
-
-    print(
-        f"[papers] existing chemistry-relevant files: {len(chemistry_old)}",
-        flush=True,
-    )
-
-    if len(chemistry_old) >= args.limit:
-        print(
-            f"[papers] existing files already reach target {args.limit}; "
-            "no new discovery/download is necessary.",
-            flush=True,
-        )
+    journals = load_journals(args.journals_file)
+    allowed = {journal.name for journal in journals}
+    old = load_existing_records(root, category="papers", permitted_journals=allowed)
+    seen_keys = set()
+    seen_sha = set()
+    for row in old:
+        seen_keys.update(identity_keys(row))
+        seen_sha.add(str(row["sha256"]).lower())
+    target = args.limit
+    total = len(old)
+    print(f"[V6] Ten whitelist journals; old_valid={total}; target={target}", flush=True)
+    if total >= target and not args.dry_run:
+        print("[V6] Target already reached; nothing to download.", flush=True)
         return
 
-    sources = [
-        x.strip()
-        for x in args.paper_sources.split(",")
-        if x.strip()
+    errors = root / "errors.jsonl"
+    candidates_csv = root / "papers_v6_candidates.csv"
+    excluded_csv = root / "papers_v6_filtered_out.csv"
+    states = [
+        {"journal": j, "iterator": iter(journal_article_iterator(
+            client, j, args.per_page, args.max_pages_per_journal, errors)),
+         "active": True, "success": 0, "tried": 0}
+        for j in journals
     ]
-    allowed = {"arxiv", "nature"}
-
-    if not sources:
-        raise ValueError("No paper source configured")
-
-    unknown = set(sources) - allowed
-    if unknown:
-        raise ValueError(
-            "V5.3 only supports arxiv,nature; unknown source(s): "
-            + ",".join(sorted(unknown))
-        )
-
-    need = args.limit - len(chemistry_old)
-    quotas = parse_source_targets(
-        args.source_targets,
-        sources,
-        need,
-    )
-
-    print(
-        f"[papers] target={args.limit}; need_new={need}",
-        flush=True,
-    )
-    print(
-        "[papers] desired successful-download quotas: "
-        + ", ".join(f"{s}={quotas[s]}" for s in sources),
-        flush=True,
-    )
-
-    dedup = build_global_dedup(old)
-    run_success = Counter()
-    run_candidates = Counter()
-    run_sha_duplicates = Counter()
-    run_download_failures = Counter()
-    candidates = []
-    filtered = []
-    duplicates = []
-
-    for item in balanced_paper_candidates(
-        client,
-        sources,
-        need,
-        quotas,
-        dedup,
-        run_success,
-    ):
-        source = item.get("source_group", "unknown")
-        run_candidates[source] += 1
-
-        status, reason = classify_candidate(item)
-        if status != "accepted":
-            filtered.append({
-                **item,
-                "filter_status": status,
-                "filter_reason": reason,
-            })
-            continue
-
-        item = {
-            **item,
-            "discipline": "Chemistry",
-            "discipline_evidence": reason,
-            "discipline_verification_level": (
-                item.get("discipline_verification_level")
-                or "source_category_or_chemistry_journal+oa_pdf"
-            ),
-        }
-        candidates.append(item)
-
-        if not args.download:
-            run_success[source] += 1
-            print(
-                f'[papers] selected (no download): '
-                f'{source} | {item.get("title", "")[:100]}',
-                flush=True,
-            )
-            continue
-
-        try:
-            record = download_one(
-                client,
-                item,
-                root,
-                args.max_file_mb,
-            )
-
-            sha_key = "sha256:" + record["sha256"].lower()
-            if sha_key in dedup:
-                duplicate_path = root / record["file"]
-                duplicate_path.unlink(missing_ok=True)
-                run_sha_duplicates[source] += 1
-
-                duplicates.append({
-                    **item,
-                    "filter_status": "duplicate",
-                    "filter_reason": "SHA-256 already exists",
-                    "duplicate_key": sha_key,
-                })
-
-                print(
-                    f'[DUP-SHA] {source}: '
-                    f'{item.get("title", "")[:100]} | {sha_key}',
-                    flush=True,
-                )
+    successes = 0
+    tried = 0
+    previewed = 0
+    while tried < args.max_attempts and (previewed if args.dry_run else total) < target:
+        made_progress = False
+        for state in states:
+            if not state["active"]:
                 continue
-
-            save_jsonl(manifest, record)
-            old.append(record)
-            dedup.add(sha_key)
-            dedup.update(paper_identity_keys(record))
-            run_success[source] += 1
-
-            chemistry_total = (
-                len(chemistry_old) + sum(run_success.values())
-            )
-
-            print(
-                f'[papers] {chemistry_total}/{args.limit}: '
-                f'{source} | '
-                f'{record.get("journal", "") or "arXiv"} | '
-                f'{record.get("title", "")[:100]} '
-                f'(run {run_success[source]}/{quotas[source]})',
-                flush=True,
-            )
-
-            if chemistry_total >= args.limit:
+            journal = state["journal"]
+            try:
+                item = next(state["iterator"])
+            except StopIteration:
+                state["active"] = False
+                continue
+            except (SourceError, requests.RequestException, ValueError, KeyError) as exc:
+                state["active"] = False
+                print(f"[WARN] {journal.name} discovery stopped: {exc}", flush=True)
+                log_error(errors, "papers", str(exc), journal=journal.name, phase="discovery")
+                continue
+            made_progress = True
+            tried += 1
+            state["tried"] += 1
+            matching = seen_keys.intersection(identity_keys(item))
+            if matching:
+                paper_audit(excluded_csv, item, "duplicate_metadata", sorted(matching)[0])
+                continue
+            if args.dry_run or not args.download:
+                previewed += 1
+                paper_audit(candidates_csv, item, "eligible_not_downloaded")
+                print(f"[PREVIEW] {previewed}/{target}: {journal.name}: {item['title'][:75]}")
+                continue
+            downloaded = False
+            last_error = "No candidate PDF succeeded"
+            for location in item["pdf_locations"][:args.max_pdf_mirrors]:
+                url = location["url"]
+                record_item = {**item,
+                               "oa_version": location["version"],
+                               "oa_pdf_host": location["oa_host"],
+                               "oa_pdf_source_page": location["landing_page"],
+                               "oa_pdf_source": "publisher" if location["publisher_pdf"] else "OA_repository",
+                               "oa_verification_level": "openalex_work_oa+pdf_location+file_signature",
+                               "license_note": location["license"] or "CHECK_ARTICLE_SPECIFIC_LICENSE",
+                               "download_url": url}
+                try:
+                    state_str, record = download_file(
+                        client, record_item, root, url=url, ext=".pdf",
+                        max_file_mb=args.max_file_mb, seen_sha=seen_sha)
+                    if state_str == "sha_duplicate":
+                        paper_audit(excluded_csv, record_item, "duplicate_sha256", "Identical PDF bytes already saved")
+                        downloaded = True  # duplicate work; do not try further locations
+                        break
+                    assert record is not None
+                    append_jsonl(root / "manifest.jsonl", record)
+                    seen_keys.update(identity_keys(record))
+                    seen_sha.add(record["sha256"])
+                    total += 1
+                    successes += 1
+                    state["success"] += 1
+                    paper_audit(candidates_csv, record, "downloaded")
+                    print(f"[papers] {total}/{target} | {journal.name} | {record['title'][:78]}", flush=True)
+                    downloaded = True
+                    break
+                except (SourceError, requests.RequestException, OSError, ValueError) as exc:
+                    last_error = str(exc)
+                    log_error(errors, "papers", last_error, journal=journal.name,
+                              doi=item["doi"], download_url=url, phase="download")
+                    print(f"[SKIP] {journal.name}: {last_error}", flush=True)
+            if not downloaded:
+                paper_audit(excluded_csv, item, "download_failed", last_error)
+            if total >= target:
                 break
+        if not made_progress or (args.dry_run and previewed >= target):
+            break
+    print(f"[V6] valid_pdf_total={total} new_downloads={successes} previewed={previewed}", flush=True)
+    for state in states:
+        print(f"  {state['journal'].name}: tried={state['tried']} downloaded={state['success']}")
+    if not args.dry_run and args.download and total < target:
+        print(f"[WARN] Target not reached: {total}/{target}. No PDF count was fabricated.", flush=True)
 
-        except Exception as exc:
-            run_download_failures[source] += 1
-            save_jsonl(errors, {
-                "category": "papers",
-                "source_group": source,
-                "download_url": item.get("download_url", ""),
-                "error": str(exc),
-                "at": utc_now(),
-            })
-            print(
-                f'[SKIP] {item.get("download_url")}: {exc} '
-                f'(source quota not consumed)',
-                flush=True,
-            )
 
-    save_csv(root / "papers_v5_3_candidates.csv", candidates)
-    save_csv(
-        root / "papers_v5_3_filtered_out.csv",
-        filtered + duplicates,
-    )
+def mit_candidates(client: Client, category: str) -> Iterator[dict]:
+    endpoint, suffix = ("lecture-videos", ".mp4") if category == "videos" else ("lecture-notes", ".pdf")
+    visited = set()
+    for course in MIT_COURSES:
+        for page in (urljoin(course, "resources/" + endpoint + "/"),
+                     urljoin(course, "download/")):
+            try:
+                soup = client.html(page)
+            except SourceError as exc:
+                print(f"[WARN] MIT page: {exc}", flush=True)
+                continue
+            for anchor in soup.select("a[href]"):
+                url = urljoin(page, anchor.get("href", ""))
+                if not is_https(url) or not urlparse(url).path.lower().endswith(suffix) or url in visited:
+                    continue
+                host = hostname(url)
+                if category == "videos" and not domain_matches(host, "archive.org"):
+                    continue
+                if category == "teaching" and not domain_matches(host, "ocw.mit.edu"):
+                    continue
+                visited.add(url)
+                stem = Path(urlparse(url).path).stem
+                title = f"{course.rstrip('/').split('/')[-1]} - {stem} - {anchor.get_text(' ', strip=True)}"[:240]
+                if course_slug(page) not in MIT_CHEMISTRY_SLUGS or VIDEO_NON_CHEMICAL_TOPIC.search(title):
+                    continue
+                yield {
+                    "category": category,
+                    "resource_kind": "course_video" if category == "videos" else "lecture_notes",
+                    "title": title, "source_page": page, "download_url": url,
+                    "publisher": "MIT OpenCourseWare",
+                    "license_note": "MIT_OCW_LICENSE_CHECK_THIRD_PARTY_MATERIAL",
+                    "published_at": "", "doi": "",
+                    "discipline": "Chemistry",
+                    "discipline_evidence": "MIT chemistry course-level whitelist",
+                }
 
-    final_records = load_manifest(manifest, root)
-    final_chemistry_records = []
 
-    for record in final_records:
-        if record.get("category") != "papers":
+def method_candidates(client: Client) -> Iterator[dict]:
+    soup = client.html(EPA_INDEX)
+    seen_pages = set()
+    for anchor in soup.select("a[href]"):
+        page = urljoin(EPA_INDEX, anchor.get("href", ""))
+        if hostname(page) != "www.epa.gov" or "/hw-sw846/sw-846-test-method-" not in urlparse(page).path:
             continue
-        status, _ = classify_candidate(record)
-        if status in {"accepted", "likely_chemistry"}:
-            final_chemistry_records.append(record)
-
-    final = len(final_chemistry_records)
-    by_source = Counter(
-        r.get("source_group", "unknown")
-        for r in final_chemistry_records
-    )
-
-    print(
-        "[papers] run candidate distribution: "
-        + ", ".join(f"{s}={run_candidates[s]}" for s in sources),
-        flush=True,
-    )
-    print(
-        "[papers] run downloaded distribution: "
-        + ", ".join(f"{s}={run_success[s]}" for s in sources),
-        flush=True,
-    )
-    print(
-        "[papers] run SHA-duplicate distribution: "
-        + ", ".join(f"{s}={run_sha_duplicates[s]}" for s in sources),
-        flush=True,
-    )
-    print(
-        "[papers] run download-failure distribution: "
-        + ", ".join(
-            f"{s}={run_download_failures[s]}" for s in sources
-        ),
-        flush=True,
-    )
-
-    # Historical Science files, if present, are preserved and may count toward
-    # the total, but V5.3 never queries Science again.
-    historical_other = sum(
-        1 for r in final_chemistry_records
-        if r.get("source_group") not in sources
-    )
-    suffix = (
-        f", historical_other={historical_other}"
-        if historical_other
-        else ""
-    )
-
-    print(
-        f"[papers] V5.3 result: {final}/{args.limit}; "
-        f"cumulative chemistry source distribution: "
-        + ", ".join(
-            f"{s}={by_source.get(s, 0)}" for s in sources
-        )
-        + suffix,
-        flush=True,
-    )
-
-
-def collect_other(
-    client: Client,
-    args,
-    root: Path,
-    category: str,
-) -> None:
-    manifest = root / "manifest.jsonl"
-    errors = root / "errors.jsonl"
-
-    old = load_manifest(manifest, root)
-    completed = sum(
-        1 for r in old if r.get("category") == category
-    )
-
-    if completed >= args.limit:
-        print(
-            f"[{category}] existing files={completed} "
-            f"already reach target={args.limit}.",
-            flush=True,
-        )
-        return
-
-    if category in ("videos", "teaching"):
-        iterator = mit_candidates(client, category)
-    elif category == "methods":
-        iterator = method_candidates(client)
-    elif category == "textbooks":
-        iterator = textbook_candidates(args.books_csv)
-    else:
-        raise ValueError(category)
-
-    seen = {
-        r.get("download_url")
-        for r in old
-        if r.get("category") == category
-    }
-    candidates = []
-
-    for item in iterator:
-        url = item.get("download_url", "")
-        if not url or url in seen:
+        if page in seen_pages:
             continue
-        seen.add(url)
-
-        status, reason = classify_candidate(item)
-        if status != "accepted":
-            candidates.append({
-                **item,
-                "filter_status": status,
-                "filter_reason": reason,
-            })
-            continue
-
-        item = {
-            **item,
-            "discipline": "Chemistry",
-            "discipline_evidence": reason,
-            "discipline_verification_level": "source_metadata",
-        }
-        candidates.append(item)
-
-        if not args.download:
-            continue
-
+        seen_pages.add(page)
         try:
-            record = download_one(
-                client, item, root, args.max_file_mb
-            )
-            save_jsonl(manifest, record)
-            completed += 1
-
-            print(
-                f'[{category}] {completed}/{args.limit}: '
-                f'{record["file"]} ({record["bytes"]:,} bytes)',
-                flush=True,
-            )
-
-            if completed >= args.limit:
+            detail = client.html(page)
+        except SourceError as exc:
+            print(f"[WARN] EPA page: {exc}")
+            continue
+        title = detail.h1.get_text(" ", strip=True) if detail.h1 else anchor.get_text(" ", strip=True)
+        for link in detail.select("a[href]"):
+            url = urljoin(page, link.get("href", ""))
+            if is_https(url) and urlparse(url).path.lower().endswith(".pdf") and domain_matches(hostname(url), "epa.gov"):
+                yield {"category": "methods", "resource_kind": "analytical_test_method",
+                       "title": title, "source_page": page, "download_url": url,
+                       "publisher": "US EPA", "license_note": "US_GOV_WORK_CHECK_THIRD_PARTY_MATERIAL",
+                       "published_at": "", "doi": ""}
                 break
 
-        except Exception as exc:
-            save_jsonl(errors, {
-                "category": category,
-                "download_url": url,
-                "error": str(exc),
-                "at": utc_now(),
-            })
-            print(f"[SKIP] {url}: {exc}", flush=True)
 
-    save_csv(
-        root / f"{category}_v5_candidates.csv",
-        candidates,
-    )
+def textbook_candidates(csv_path: Path) -> Iterator[dict]:
+    if not csv_path.exists():
+        print(f"[INFO] Optional textbook seeds absent: {csv_path}")
+        return
+    with csv_path.open(encoding="utf-8-sig", newline="") as f:
+        for row in csv.DictReader(f):
+            url = str(row.get("download_url") or "").strip()
+            title = str(row.get("title") or "").strip()
+            if not is_https(url) or not urlparse(url).path.lower().endswith(".pdf") or not CHEMISTRY_BOOK_TITLE.search(title):
+                continue
+            yield {"category": "textbooks", "resource_kind": "whole_textbook",
+                   "title": title, "source_page": row.get("source_page", ""),
+                   "download_url": url, "publisher": row.get("publisher", ""),
+                   "license_note": row.get("license_note", "CHECK_BOOK_LICENSE"),
+                   "published_at": row.get("published_at", ""), "doi": ""}
 
 
-def audit_existing(root: Path) -> None:
-    records = load_manifest(
-        root / "manifest.jsonl", root
-    )
-    rows = []
+def collect_other(client: Client, args, root: Path, category: str) -> None:
+    old = load_existing_records(root, category=category)
+    total = len(old)
+    if total >= args.limit:
+        print(f"[{category}] Target already reached: {total}/{args.limit}")
+        return
+    seen_url = {r.get("download_url") for r in old}
+    seen_sha = {str(r["sha256"]).lower() for r in old}
+    if category in {"videos", "teaching"}:
+        candidates = mit_candidates(client, category)
+        ext = ".mp4" if category == "videos" else ".pdf"
+    elif category == "methods":
+        candidates, ext = method_candidates(client), ".pdf"
+    elif category == "textbooks":
+        candidates, ext = textbook_candidates(args.books_csv), ".pdf"
+    else:
+        raise ValueError(f"Unsupported category: {category}")
+    for item in candidates:
+        if total >= args.limit:
+            break
+        url = item["download_url"]
+        if url in seen_url:
+            continue
+        seen_url.add(url)
+        if not args.download or args.dry_run:
+            print(f"[PREVIEW] {category}: {item['title'][:90]}")
+            continue
+        try:
+            status, record = download_file(client, item, root, url=url, ext=ext,
+                                           max_file_mb=args.max_file_mb, seen_sha=seen_sha)
+            if status == "sha_duplicate":
+                print(f"[DUP-SHA] {category}: {url}")
+                continue
+            assert record is not None
+            append_jsonl(root / "manifest.jsonl", record)
+            seen_sha.add(record["sha256"])
+            total += 1
+            print(f"[{category}] {total}/{args.limit}: {record['file']}")
+        except (SourceError, requests.RequestException, OSError, ValueError) as exc:
+            log_error(root / "errors.jsonl", category, str(exc), download_url=url)
+            print(f"[SKIP] {category}: {exc}")
 
-    for record in records:
-        status, evidence = classify_candidate(record)
-        rows.append({
-            **record,
-            "audit_verdict": status,
-            "audit_evidence": evidence,
-            "audited_at": utc_now(),
-        })
 
-    save_csv(
-        root / "chemistry_audit_v5.csv",
-        rows,
-    )
-
-    counter = Counter(
-        row["audit_verdict"] for row in rows
-    )
-
-    print(
-        f"[AUDIT] {len(rows)} inspected: "
-        f"accepted={counter['accepted']}, "
-        f"rejected={counter['rejected']}, "
-        f"needs_review={counter['needs_review']}.",
-        flush=True,
-    )
+def audit_existing(root: Path, categories: list[str], journals: list[Journal]) -> None:
+    for category in categories:
+        valid = load_existing_records(root, category=category,
+                   permitted_journals={j.name for j in journals} if category == "papers" else None)
+        errors = 0
+        for row in valid:
+            if hash_file(root / row["file"]) != str(row["sha256"]).lower():
+                errors += 1
+                print(f"[AUDIT-SHA-MISMATCH] {row['file']}")
+        print(f"[AUDIT] category={category}, checked={len(valid)}, SHA mismatches={errors}")
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(
-        description=__doc__
-    )
-
-    parser.add_argument(
-        "--categories",
-        default="papers,videos,teaching,methods",
-    )
-    parser.add_argument(
-        "--limit",
-        type=int,
-        default=100,
-        help="successful files per category",
-    )
-    parser.add_argument(
-        "--download",
-        action="store_true",
-    )
-    parser.add_argument(
-        "--out",
-        type=Path,
-        default=Path("chemistry_dataset"),
-    )
-    parser.add_argument(
-        "--contact",
-        default="your-email@example.org",
-    )
-    parser.add_argument(
-        "--paper-sources",
-        default="arxiv,nature",
-        help="comma-separated: arxiv,nature",
-    )
-    parser.add_argument(
-        "--source-targets",
-        default="",
-        help="e.g. arxiv=5,nature=5",
-    )
-    parser.add_argument(
-        "--max-file-mb",
-        type=int,
-        default=500,
-    )
-    parser.add_argument(
-        "--books-csv",
-        type=Path,
-        default=Path("textbook_seeds.csv"),
-    )
-    parser.add_argument(
-        "--audit-only",
-        action="store_true",
-    )
-
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--categories", default="papers", help="papers,videos,teaching,methods,textbooks")
+    parser.add_argument("--limit", type=int, default=100, help="cumulative successful files per category")
+    parser.add_argument("--download", action="store_true", help="download originals (otherwise only preview)")
+    parser.add_argument("--dry-run", action="store_true", help="preview eligible papers only")
+    parser.add_argument("--out", type=Path, default=ROOT / "chemistry_dataset" / "papers_dataset")
+    parser.add_argument("--journals-file", type=Path, default=ROOT / "config" / "journals_v6.json")
+    parser.add_argument("--contact", default="", help="optional polite contact email for User-Agent")
+    parser.add_argument("--max-file-mb", type=int, default=500)
+    parser.add_argument("--max-pdf-mirrors", type=int, default=3)
+    parser.add_argument("--max-pages-per-journal", type=int, default=8)
+    parser.add_argument("--per-page", type=int, default=50)
+    parser.add_argument("--max-attempts", type=int, default=3000)
+    parser.add_argument("--books-csv", type=Path, default=ROOT / "config" / "textbook_seeds.csv")
+    parser.add_argument("--audit-only", action="store_true")
     args = parser.parse_args()
-
-    if args.limit < 1:
-        parser.error("--limit must be >= 1")
-
-    categories = [
-        x.strip()
-        for x in args.categories.split(",")
-        if x.strip()
-    ]
-
-    unknown = set(categories) - CATEGORIES
-    if unknown:
-        parser.error(
-            "Unknown categories: "
-            + ",".join(sorted(unknown))
-        )
-
-    args.out.mkdir(
-        parents=True,
-        exist_ok=True,
-    )
-
-    client = Client(args.contact)
-
+    cats = [x.strip() for x in args.categories.split(",") if x.strip()]
+    if not cats or not set(cats).issubset(CATEGORY_CHOICES):
+        parser.error(f"Unknown categories; allowed: {sorted(CATEGORY_CHOICES)}")
+    if any(x <= 0 for x in (args.limit, args.max_file_mb, args.max_pdf_mirrors,
+                             args.max_pages_per_journal, args.per_page, args.max_attempts)):
+        parser.error("Numeric limits must all be greater than zero")
+    if args.per_page > 100:
+        parser.error("OpenAlex --per-page must be <= 100")
+    args.out.mkdir(parents=True, exist_ok=True)
+    # Fail early on whitelist problems even before any network traffic.
+    journals = load_journals(args.journals_file) if "papers" in cats else []
     if args.audit_only:
-        audit_existing(args.out)
+        audit_existing(args.out, cats, journals)
         return
-
-    for category in categories:
-        print(
-            f"\\n=== {category} | target={args.limit} ===",
-            flush=True,
-        )
-
+    client = Client(args.contact)
+    for category in cats:
+        print(f"\n=== V6 {category} target={args.limit} ===", flush=True)
         try:
             if category == "papers":
-                collect_papers(
-                    client, args, args.out
-                )
+                collect_papers(client, args, args.out)
             else:
-                collect_other(
-                    client, args, args.out, category
-                )
-        except Exception as exc:
-            save_jsonl(
-                args.out / "errors.jsonl",
-                {
-                    "category": category,
-                    "phase": "collection",
-                    "error": str(exc),
-                    "at": utc_now(),
-                },
-            )
-            print(
-                f"[ERROR] {category}: {exc}",
-                flush=True,
-            )
-
-    print(
-        "\\nDone. Existing raw files and manifest records "
-        "are preserved. V5 uses balanced paper-source "
-        "scheduling and global deduplication.",
-        flush=True,
-    )
+                collect_other(client, args, args.out, category)
+        except (SourceError, RuntimeError, OSError, ValueError) as exc:
+            log_error(args.out / "errors.jsonl", category, str(exc), phase="collection")
+            print(f"[ERROR] {category}: {exc}", flush=True)
+            raise
 
 
 if __name__ == "__main__":
