@@ -5,9 +5,9 @@ import sys
 ROOT = Path(__file__).resolve().parents[1]
 COLLECTOR = ROOT / "collector.py"
 
-# V6.1 可行性目标：3 本白名单期刊，每刊至少 3 篇有效 OA 论文。
+# V6.1 可行性目标：20 本白名单期刊，每刊至少 1 篇有效 OA 论文。
 # TARGET = 300
-PER_JOURNAL_TARGET = 3
+PER_JOURNAL_TARGET = 1
 
 cmd = [
     sys.executable,

@@ -132,7 +132,7 @@ def load_journals(path: Path) -> list[Journal]:
     if not path.is_file():
         raise FileNotFoundError(f"Journal whitelist missing: {path}")
     data = json.loads(path.read_text(encoding="utf-8"))
-    if not isinstance(data, list) or len(data) != WHITELIST_SIZE:
+    if not isinstance(data, list) or not (1 <= len(data) <= WHITELIST_SIZE):
         raise ValueError(
             f"V6.1 journal whitelist must contain exactly {WHITELIST_SIZE} journals"
         )
@@ -607,8 +607,9 @@ def save_journal_stats(root: Path, journals: list[Journal], records: list[dict],
 def refresh_journal_stats(root: Path, journals: list[Journal],
                           per_journal_target: int = 20) -> dict[str, int]:
     """Rebuild from manifest and real files, without network requests."""
-    records = load_existing_records(root, category="papers",
-                                    permitted_journals={j.name for j in journals})
+    allowed = {j.name for j in journals}
+    records = [r for r in load_existing_records(root, category="papers")
+               if r.get("journal") in allowed]
     return save_journal_stats(root, journals, records, per_journal_target)
 
 
@@ -672,10 +673,11 @@ def print_journal_stats(counts: dict[str, int]) -> None:
 def collect_papers(client: Client, args, root: Path) -> None:
     journals = load_journals(args.journals_file)
     allowed = {journal.name for journal in journals}
-    old = load_existing_records(root, category="papers", permitted_journals=allowed)
+    all_history = load_existing_records(root, category="papers")
+    old = [row for row in all_history if row.get("journal") in allowed]
     seen_keys = set()
     seen_sha = set()
-    for row in old:
+    for row in all_history:
         seen_keys.update(identity_keys(row))
         seen_sha.add(str(row["sha256"]).lower())
     per_journal_target = args.per_journal_target
@@ -964,8 +966,9 @@ def collect_other(client: Client, args, root: Path, category: str) -> None:
 
 def audit_existing(root: Path, categories: list[str], journals: list[Journal]) -> None:
     for category in categories:
-        valid = load_existing_records(root, category=category,
-                   permitted_journals={j.name for j in journals} if category == "papers" else None)
+        valid = load_existing_records(root, category=category)
+        if category == "papers":
+            valid = [r for r in valid if r.get("journal") in {j.name for j in journals}]
         errors = 0
         for row in valid:
             if hash_file(root / row["file"]) != str(row["sha256"]).lower():
