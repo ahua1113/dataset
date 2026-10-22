@@ -534,6 +534,65 @@ def paper_audit(path: Path, item: dict, status: str, reason: str = "") -> None:
                       "filter_reason": reason}, PAPER_AUDIT_COLUMNS)
 
 
+def save_journal_stats(root: Path, journals: list[Journal], records: list[dict]) -> dict[str, int]:
+    """Rebuild per-journal counts from downloaded manifest files; deduplicate by SHA-256."""
+    counts = {journal.name: 0 for journal in journals}
+    seen_sha: set[str] = set()
+    for record in records:
+        if record.get("journal") not in counts:
+            continue
+        digest = str(record.get("sha256") or "").lower()
+        if digest in seen_sha:
+            continue
+        seen_sha.add(digest)
+        counts[record["journal"]] += 1
+
+    updated_at = now_utc()
+    total = sum(counts.values())
+    rows = [{
+        "journal": journal.name,
+        "issn": journal.issn,
+        "publisher": journal.publisher,
+        "count": counts[journal.name],
+        "percentage": round(100 * counts[journal.name] / total, 2) if total else 0.0,
+    } for journal in journals]
+    report = {
+        "version": "V6",
+        "updated_at": updated_at,
+        "counting_rule": "unique SHA-256, status=downloaded, manifest record and local file exist with matching recorded size",
+        "total_papers": total,
+        "journals": rows,
+    }
+    root.mkdir(parents=True, exist_ok=True)
+    json_path = root / "journal_stats.json"
+    json_tmp = root / "journal_stats.json.tmp"
+    json_tmp.write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    json_tmp.replace(json_path)
+
+    csv_path = root / "journal_stats.csv"
+    csv_tmp = root / "journal_stats.csv.tmp"
+    with csv_tmp.open("w", encoding="utf-8-sig", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=["journal", "issn", "publisher", "count", "percentage"])
+        writer.writeheader()
+        writer.writerows(rows)
+    csv_tmp.replace(csv_path)
+    return counts
+
+
+def refresh_journal_stats(root: Path, journals: list[Journal]) -> dict[str, int]:
+    """Rebuild from manifest and real files, without network requests."""
+    records = load_existing_records(root, category="papers",
+                                    permitted_journals={j.name for j in journals})
+    return save_journal_stats(root, journals, records)
+
+
+def print_journal_stats(counts: dict[str, int]) -> None:
+    print("[JOURNAL STATS] successfully downloaded, unique PDFs:", flush=True)
+    for journal, count in counts.items():
+        print(f"  {journal}: {count}", flush=True)
+    print(f"  TOTAL: {sum(counts.values())}", flush=True)
+
+
 def collect_papers(client: Client, args, root: Path) -> None:
     journals = load_journals(args.journals_file)
     allowed = {journal.name for journal in journals}
@@ -544,10 +603,12 @@ def collect_papers(client: Client, args, root: Path) -> None:
         seen_keys.update(identity_keys(row))
         seen_sha.add(str(row["sha256"]).lower())
     target = args.limit
-    total = len(old)
+    counts = save_journal_stats(root, journals, old)
+    total = sum(counts.values())
     print(f"[V6] Ten whitelist journals; old_valid={total}; target={target}", flush=True)
     if total >= target and not args.dry_run:
         print("[V6] Target already reached; nothing to download.", flush=True)
+        print_journal_stats(counts)
         return
 
     errors = root / "errors.jsonl"
@@ -617,6 +678,10 @@ def collect_papers(client: Client, args, root: Path) -> None:
                     total += 1
                     successes += 1
                     state["success"] += 1
+                    counts[journal.name] += 1
+                    old.append(record)
+                    save_journal_stats(root, journals, old)
+                    print(f"[JOURNAL STATS] {journal.name}={counts[journal.name]} | TOTAL={total}", flush=True)
                     paper_audit(candidates_csv, record, "downloaded")
                     print(f"[papers] {total}/{target} | {journal.name} | {record['title'][:78]}", flush=True)
                     downloaded = True
@@ -632,6 +697,8 @@ def collect_papers(client: Client, args, root: Path) -> None:
                 break
         if not made_progress or (args.dry_run and previewed >= target):
             break
+    counts = refresh_journal_stats(root, journals)
+    print_journal_stats(counts)
     print(f"[V6] valid_pdf_total={total} new_downloads={successes} previewed={previewed}", flush=True)
     for state in states:
         print(f"  {state['journal'].name}: tried={state['tried']} downloaded={state['success']}")
@@ -790,6 +857,8 @@ def main() -> None:
     parser.add_argument("--max-attempts", type=int, default=3000)
     parser.add_argument("--books-csv", type=Path, default=ROOT / "config" / "textbook_seeds.csv")
     parser.add_argument("--audit-only", action="store_true")
+    parser.add_argument("--stats-only", action="store_true",
+                        help="rebuild and display paper journal counts without network requests")
     args = parser.parse_args()
     cats = [x.strip() for x in args.categories.split(",") if x.strip()]
     if not cats or not set(cats).issubset(CATEGORY_CHOICES):
@@ -802,6 +871,11 @@ def main() -> None:
     args.out.mkdir(parents=True, exist_ok=True)
     # Fail early on whitelist problems even before any network traffic.
     journals = load_journals(args.journals_file) if "papers" in cats else []
+    if args.stats_only:
+        if "papers" not in cats:
+            parser.error("--stats-only requires --categories papers")
+        print_journal_stats(refresh_journal_stats(args.out, journals))
+        return
     if args.audit_only:
         audit_existing(args.out, cats, journals)
         return
