@@ -1,10 +1,12 @@
-# 化学源数据采集 V6.0 — 十刊白名单 / OA 优先 / 文件与元数据去重
+# 化学源数据采集 V6.1 — 20 刊白名单 / 逐刊 20 篇可行性测试
 
 ## 版本目标
 
-只从**经过 ISSN 核实的 10 本化学顶刊**发现研究论文，优先下载无需订阅登录、具有公开 PDF 链接的 OA 论文。**V6 不进行任何付费墙绕过、出版商登录或其他认证流程，也不抓取预印本来源。**
+只从**经过 ISSN 核实的 20 本化学期刊白名单**发现研究论文。V6.1 的阶段性验收标准是**每本期刊至少发现 20 篇合格 OA 候选；正式下载时则要求每刊至少保存 20 份有效、未重复 PDF**。程序不再用一个全局总量掩盖某些期刊为零的问题。
 
-V6 继续保存 PDF 原文件，不做正文解析、OCR、化学知识抽取或论文语义相似度分析。视频部分保持 MIT OCW 来源，并补上视频 SHA-256 文件级去重。
+**V6.1 不进行任何付费墙绕过、出版商登录或其他认证流程，也不抓取预印本来源。**403、429、robots.txt 拒绝等情况会记录到报告并跳过。
+
+V6.1 继续保存 PDF 原文件，不做正文解析、OCR、化学知识抽取或论文语义相似度分析。视频部分保持 MIT OCW 来源，并保留视频 SHA-256 文件级去重。
 
 > 关于“顶刊”：这是本项目**人工维护的期刊白名单**，不是机器自动判定期刊影响因子或期刊等级。数据准确性取决于白名单和 OpenAlex 期刊元数据。
 
@@ -20,7 +22,7 @@ V6 继续保存 PDF 原文件，不做正文解析、OCR、化学知识抽取或
 
 其中 **Communications Chemistry、Nature Chemical Biology** 并未出现在本次上传的《化学顶刊分类_修订版_四类40刊.xlsx》里，但根据“保留 V5.3 五本”的要求仍然保留。
 
-### 从 Excel 的“第二类 综合化学旗舰期刊”新选五本
+### 从 Excel 的“第二类 综合化学旗舰期刊”选择五本
 
 6. ACS Central Science
 7. Angewandte Chemie International Edition
@@ -28,39 +30,50 @@ V6 继续保存 PDF 原文件，不做正文解析、OCR、化学知识抽取或
 9. Chemical Science
 10. Journal of the American Chemical Society (JACS)
 
-选择原因：相比 Nature / Science / Nature Communications 等跨学科综合刊，这五本以化学为学科核心，适合直接按期刊身份完成学科级筛选；其中 ACS Central Science 与 Chemical Science 为开放获取取向，有助于 V6 早期积累 OA PDF。四类 40 刊是**学科定位分类**，并非官方排名。
+### V6.1 新增十本专业或交叉期刊
 
-具体 ISSN、出版机构、来源、出版社域名写在 `config/journals_v6.json`。若以后调整期刊，只修改 JSON（必须保持 10 本），无需动爬虫主逻辑。
+11. Nature Energy
+12. Nature Materials
+13. Nature Nanotechnology
+14. Joule
+15. Energy & Environmental Science
+16. ACS Catalysis
+17. Nature Chemical Engineering
+18. Advanced Energy Materials
+19. ACS Energy Letters
+20. ACS Nano
 
-## 相比 V5.3 的变更
+新增期刊均来自《化学顶刊分类_四类40刊.xlsx》。本阶段优先加入能源、材料、纳米、催化和化学工程方向，先扩大化学子学科覆盖；Nature、Science 等宽泛综合刊暂不进入这 20 刊，以免仅凭期刊身份混入大量非化学论文。四类 40 刊是**学科定位分类**，并非官方排名。
 
-| 项目 | V5.3 | V6.0 |
+具体 ISSN、出版机构、来源、出版社域名写在 `config/journals_v6_1.json`。白名单必须保持 20 本且期刊名称和 ISSN 不得重复。
+
+## 相比 V6.0 的变更
+
+| 项目 | V6.0 | V6.1 |
 |---|---|---|
-| 论文来源 | arXiv + 5 本 Nature | 严格 10 本期刊白名单；完全取消预印本来源发现 |
-| 学科判断 | arXiv 分类或 Nature 期刊白名单 | ISSN → OpenAlex Source ID → 论文 primary journal Source ID 一致 |
-| 论文类型 | 主要按来源 | 仅 `article`，排除明显的勘误、撤稿、编者按；缺 DOI 的作品不收 |
-| OA 要求 | 主要查可获取 PDF | `open_access.is_oa` + 逐个核验 OA 位置，优先出版社 PDF |
-| 付费/认证 | 不使用 | 不使用；遇 401/403/付费登录跳转跳过 |
-| 元数据去重 | DOI/标题/OpenAlex/URL 等 | DOI、规范化标题、OpenAlex ID、下载 URL |
-| 文件级去重 | PDF SHA-256 | PDF 和 MP4 下载后均对已有 SHA-256 查重 |
-| 溯源 | manifest.jsonl | 延续并增加来源期刊 ISSN、OA 版本、实际 PDF 来源、筛选证据 |
+| 论文来源 | 10 本白名单 | 20 本白名单，新增 10 本专业/交叉期刊 |
+| 停止条件 | 全局 `--limit` | `--per-journal-target`，逐刊分别达标 |
+| 可行性测试 | 只有总量和下载统计 | 逐刊输出候选、尝试、下载、有效 PDF 和失败原因 |
+| 版本标记 | `6.0` | `6.1` |
+| OpenAlex 认证 | 无专用参数 | 支持 `OPENALEX_API_KEY` 或 `--openalex-api-key` |
 
 ## 安装与替换
 
 将此包里的文件按相同目录放进 `F:\Ontology_Design_Annotation\get_data\chemistry_source_collector` 项目中。
 
 - `collector.py`：替换旧主程序。
-- `config/journals_v6.json`：新增十刊白名单。
+- `config/journals_v6_1.json`：V6.1 的 20 刊白名单。
 - `crawl/crawl_papers.py`：替换旧论文运行入口；已移除 `--paper-sources arxiv,nature` 参数。
 - `crawl/crawl_videos.py`：兼容的 MIT OCW 视频运行入口。
 - `requirements.txt`：依赖说明。
-- `tests/test_collector_v6.py`：离线自动化测试。
+- `tests/test_collector_v6_1.py`：20 刊逐刊目标自动化测试。
+- `docs/V6_1_VALIDATION.md`：真实 Source ID 解析结果与当前 429 配额限制记录。
 
 ### 第一次运行前的数据说明
 
-清空 V5.3 以前的数据。**V6 本身不会删除、覆盖或自动清空任何历史数据。** 请先在本地**备份**旧 `chemistry_dataset` 文件夹，然后人工确认要清空哪些 `raw/` 文件、`manifest.jsonl` 和候选/错误记录。
+**V6.1 本身不会删除、覆盖或自动清空任何历史数据。** 请先在本地备份旧 `chemistry_dataset` 文件夹，再人工确认是否要清理旧文件。
 
-如果现有论文 `manifest.jsonl` 中还有白名单以外的来源，V6 会报错并停止，防止把旧数据算进 V6 成果。也可以把 `--out` 改成新的空文件夹避免与旧数据混淆。
+如果现有论文 `manifest.jsonl` 中还有白名单以外的来源，V6.1 会报错并停止，防止把旧数据算进成果。也可以把 `--out` 改成新的空文件夹避免与旧数据混淆。
 
 ## 在 PyCharm 中运行
 
@@ -71,19 +84,23 @@ python -m pip install -r requirements.txt
 python crawl/crawl_papers.py
 ```
 
-在 `crawl/crawl_papers.py` 中修改 `TARGET = 300` 即可设置**累计成功下载、未重复的 PDF 数量**。已有有效文件数计入目标。下载失败或 SHA 重复不会消耗目标配额。
+在 `crawl/crawl_papers.py` 中修改 `PER_JOURNAL_TARGET = 20` 可设置逐刊最低数量。已有有效文件数会按期刊计入；下载失败或 SHA 重复不计入目标。
 
 也可以在终端直接运行：
 
 ```powershell
-# 预览 10 篇可用的顶刊 OA 候选，不下载 PDF
-python collector.py --categories papers --limit 10 --dry-run
+# 每本期刊预览 20 篇合格 OA 候选，不下载 PDF
+python collector.py --categories papers --per-journal-target 20 --dry-run
 
-# 正式累计采集 300 篇
-python collector.py --categories papers --limit 300 --download --out chemistry_dataset/papers_dataset
+# 正式采集：20 本期刊分别达到至少 20 份有效 PDF
+python collector.py --categories papers --per-journal-target 20 --download --out chemistry_dataset/papers_dataset
 
 # 如果 OA 论文较少，可以适当增加每期刊查询页数
-python collector.py --categories papers --limit 300 --download --max-pages-per-journal 15
+python collector.py --categories papers --per-journal-target 20 --download --max-pages-per-journal 15
+
+# OpenAlex 配额要求 API key 时（PowerShell）
+$env:OPENALEX_API_KEY="你的 key"
+python crawl/crawl_papers.py
 
 # 核验本地已下载文件的 SHA-256（不执行采集）
 python collector.py --categories papers --audit-only --out chemistry_dataset/papers_dataset
@@ -99,7 +116,7 @@ python -m unittest discover -s tests -v
 
 ## 核心筛选流程
 
-1. 读入十刊白名单，通过期刊 ISSN 向 OpenAlex 查询 Source ID，并确认返回 ISSN 一致。
+1. 读入 20 刊白名单，通过期刊 ISSN 向 OpenAlex 查询 Source ID，并确认返回 ISSN 一致。
 2. **仅检索 `primary_location.source.id` 为目标期刊 Source ID 的论文**；要求 OpenAlex 类型为 `article`，标记 OA 且未撤稿。
 3. 要求 DOI 不为空；拒绝明显的 correction / retraction / editorial 等标题。
 4. 读取公开 OA PDF 地址：优先出版社公开 PDF，出版社无公开 PDF 时可退到 OpenAlex 识别的**正式发表版或接收稿版**仓储 PDF。排除预印本服务器和提交稿版本。
@@ -119,7 +136,8 @@ chemistry_source_collector/
 ├── collector.py
 ├── requirements.txt
 ├── config/
-│   └── journals_v6.json
+│   ├── journals_v6.json
+│   └── journals_v6_1.json
 ├── crawl/
 │   ├── crawl_papers.py
 │   └── crawl_videos.py
@@ -127,8 +145,10 @@ chemistry_source_collector/
     ├── papers_dataset/
     │   ├── raw/papers/*.pdf
     │   ├── manifest.jsonl
-    │   ├── papers_v6_candidates.csv
-    │   ├── papers_v6_filtered_out.csv
+    │   ├── papers_v6_1_candidates.csv
+    │   ├── papers_v6_1_filtered_out.csv
+    │   ├── journal_feasibility_v6_1.json
+    │   ├── journal_feasibility_v6_1.csv
     │   └── errors.jsonl
     └── videos_dataset/
         ├── raw/videos/*.mp4
@@ -140,7 +160,7 @@ chemistry_source_collector/
 
 ### 当前功能边界
 
-- 这是**代码与离线验证版本**，没有在此执行真实 OpenAlex/出版社联机采集。不能预先保证每期刊都有足够 OA PDF，也不能保证出版社不拒绝访问。
+- 已联机验证 20 个 ISSN 均可解析到 OpenAlex Source ID；本次环境的 Works API 因共享额度返回 429，尚未完成真实 20×20 候选/PDF 验收。详情见 `docs/V6_1_VALIDATION.md`。
 - 不登录任何出版商网站、不处理验证码、不绕过 403/429、付费墙或反爬策略。失败会记录，成功总数可能低于目标。
 - SHA-256 只能找出**字节完全一致**的重复 PDF / MP4，不能识别语义内容相同或不同排版版本；同时使用 DOI 等元数据查重可补充论文级去重。
-- 本版只把论文来源切换到十刊；视频仍来自 MIT OCW，不受论文期刊白名单限制。
+- 论文使用 20 刊白名单；视频仍来自 MIT OCW，不受论文期刊白名单限制。

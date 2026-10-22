@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
-"""Chemistry Source Collector V6.0.
+"""Chemistry Source Collector V6.1.
 
-Papers: ten manually approved chemistry journals, OpenAlex OA PDF metadata,
-        per-journal rotation, global metadata and SHA-256 file deduplication.
+Papers: twenty manually approved chemistry journals, OpenAlex OA PDF metadata,
+        per-journal minimum targets, global metadata and SHA-256 deduplication.
 No preprint-source discovery and no publisher-login/paywall bypassing logic.
 The V5.3 MIT-OCW videos/teaching and optional methods/textbooks remain usable.
 
 Quick start:
-    python collector.py --categories papers --limit 300 --download
-    python collector.py --categories papers --limit 10 --dry-run
+    python collector.py --categories papers --per-journal-target 20 --download
+    python collector.py --categories papers --per-journal-target 20 --dry-run
 """
 from __future__ import annotations
 
@@ -18,6 +18,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 import hashlib
 import json
+import os
 import re
 import time
 from pathlib import Path
@@ -29,12 +30,14 @@ import requests
 from bs4 import BeautifulSoup
 
 ROOT = Path(__file__).resolve().parent
+COLLECTOR_VERSION = "6.1"
+WHITELIST_SIZE = 20
 OPENALEX_SOURCES = "https://api.openalex.org/sources"
 OPENALEX_WORKS = "https://api.openalex.org/works"
 EPA_INDEX = "https://www.epa.gov/hw-sw846/sw-846-compendium"
 
 # The only sources for PAPER discovery are ISSN-verified journals loaded from
-# config/journals_v6.json. There is deliberately no preprint crawler.
+# config/journals_v6_1.json. There is deliberately no preprint crawler.
 CATEGORY_CHOICES = {"papers", "videos", "teaching", "methods", "textbooks"}
 EXCLUDED_ARTICLE_TITLES = re.compile(
     r"^\s*(?:publisher(?:'s|’s)?\s+correction|author\s+correction|"
@@ -129,8 +132,10 @@ def load_journals(path: Path) -> list[Journal]:
     if not path.is_file():
         raise FileNotFoundError(f"Journal whitelist missing: {path}")
     data = json.loads(path.read_text(encoding="utf-8"))
-    if not isinstance(data, list) or len(data) != 10:
-        raise ValueError("V6 journal whitelist must contain exactly 10 journals")
+    if not isinstance(data, list) or len(data) != WHITELIST_SIZE:
+        raise ValueError(
+            f"V6.1 journal whitelist must contain exactly {WHITELIST_SIZE} journals"
+        )
     result = []
     names, issns = set(), set()
     for row in data:
@@ -162,13 +167,15 @@ class SourceError(RuntimeError):
 class Client:
     """No login, session cookies, paywall workaround or other auth workflow."""
 
-    def __init__(self, contact: str = "", respect_robots: bool = True):
+    def __init__(self, contact: str = "", respect_robots: bool = True,
+                 openalex_api_key: str = ""):
         self.session = requests.Session()
-        agent = "AcademicChemistrySourceCollector/6.0"
+        agent = f"AcademicChemistrySourceCollector/{COLLECTOR_VERSION}"
         if contact.strip():
             agent += f" (contact: {contact.strip()})"
         self.session.headers.update({"User-Agent": agent, "Accept": "application/json, application/pdf, */*"})
         self.respect_robots = respect_robots
+        self.openalex_api_key = openalex_api_key.strip()
         self.robot_parsers: dict[str, RobotFileParser] = {}
         self.last_request: dict[str, float] = {}
 
@@ -209,8 +216,11 @@ class Client:
             raise SourceError(f"Disallowed by robots.txt: {url}")
         self.wait(url)
         try:
+            headers = {}
+            if api and self.openalex_api_key and domain_matches(hostname(url), "openalex.org"):
+                headers["Authorization"] = f"Bearer {self.openalex_api_key}"
             response = self.session.get(url, timeout=(10, 40), stream=stream,
-                                        allow_redirects=True)
+                                        allow_redirects=True, headers=headers)
         except requests.RequestException as exc:
             raise SourceError(str(exc)) from exc
         if not is_https(response.url):
@@ -219,6 +229,12 @@ class Client:
         if not response.ok:
             status = response.status_code
             response.close()
+            if status == 429 and domain_matches(hostname(url), "openalex.org"):
+                key_hint = ("OpenAlex API key budget/rate limit reached"
+                            if self.openalex_api_key else
+                            "OpenAlex shared rate limit reached; set OPENALEX_API_KEY "
+                            "or use --openalex-api-key")
+                raise SourceError(f"HTTP 429: {key_hint}")
             raise SourceError(f"HTTP {status} for {url}")
         # Publishers can redirect an OA URL to a login / access wall.
         if not api and re.search(r"/(?:login|signin|authenticate)(?:[/?]|$)", urlparse(response.url).path, re.I):
@@ -329,7 +345,7 @@ def article_candidate(work: dict, journal: Journal, source_id: str) -> tuple[dic
         "category": "papers", "resource_kind": "research_article",
         "title": title, "journal": journal.name, "journal_issn": journal.issn,
         "journal_group": journal.group, "journal_whitelist_origin": journal.origin,
-        "publisher": journal.publisher, "source_group": "top10_journals",
+        "publisher": journal.publisher, "source_group": "v6_1_twenty_journals",
         "source_page": article_page, "doi": doi,
         "openalex_id": str(work.get("id") or ""),
         "openalex_source_id": source_id,
@@ -416,8 +432,8 @@ def load_existing_records(root: Path, *, category: str,
             continue
         if permitted_journals is not None and row.get("journal") not in permitted_journals:
             raise RuntimeError(
-                f"Existing manifest contains a non-V6 journal record: {row.get('journal')!r}. "
-                "Use an empty V6 output folder; the program will NOT erase legacy data."
+                f"Existing manifest contains a non-V6.1 journal record: {row.get('journal')!r}. "
+                "Use an empty V6.1 output folder; the program will NOT erase legacy data."
             )
         rel = Path(str(row.get("file") or ""))
         if not rel.parts or rel.is_absolute() or ".." in rel.parts:
@@ -497,7 +513,7 @@ def download_file(client: Client, item: dict, root: Path, *, url: str,
             "download_url": url, "file": str(target.relative_to(root)),
             "bytes": total, "sha256": digest,
             "mime_expected": MIME[ext], "collected_at": now_utc(),
-            "status": "downloaded", "collector_version": "6.0",
+            "status": "downloaded", "collector_version": COLLECTOR_VERSION,
         })
         return "downloaded", record
     finally:
@@ -534,7 +550,8 @@ def paper_audit(path: Path, item: dict, status: str, reason: str = "") -> None:
                       "filter_reason": reason}, PAPER_AUDIT_COLUMNS)
 
 
-def save_journal_stats(root: Path, journals: list[Journal], records: list[dict]) -> dict[str, int]:
+def save_journal_stats(root: Path, journals: list[Journal], records: list[dict],
+                       per_journal_target: int = 20) -> dict[str, int]:
     """Rebuild per-journal counts from downloaded manifest files; deduplicate by SHA-256."""
     counts = {journal.name: 0 for journal in journals}
     seen_sha: set[str] = set()
@@ -554,12 +571,16 @@ def save_journal_stats(root: Path, journals: list[Journal], records: list[dict])
         "issn": journal.issn,
         "publisher": journal.publisher,
         "count": counts[journal.name],
+        "target": per_journal_target,
+        "target_met": counts[journal.name] >= per_journal_target,
         "percentage": round(100 * counts[journal.name] / total, 2) if total else 0.0,
     } for journal in journals]
     report = {
-        "version": "V6",
+        "version": "V6.1",
         "updated_at": updated_at,
         "counting_rule": "unique SHA-256, status=downloaded, manifest record and local file exist with matching recorded size",
+        "per_journal_target": per_journal_target,
+        "journals_meeting_target": sum(row["target_met"] for row in rows),
         "total_papers": total,
         "journals": rows,
     }
@@ -572,18 +593,73 @@ def save_journal_stats(root: Path, journals: list[Journal], records: list[dict])
     csv_path = root / "journal_stats.csv"
     csv_tmp = root / "journal_stats.csv.tmp"
     with csv_tmp.open("w", encoding="utf-8-sig", newline="") as f:
-        writer = csv.DictWriter(f, fieldnames=["journal", "issn", "publisher", "count", "percentage"])
+        writer = csv.DictWriter(
+            f,
+            fieldnames=["journal", "issn", "publisher", "count", "target",
+                        "target_met", "percentage"],
+        )
         writer.writeheader()
         writer.writerows(rows)
     csv_tmp.replace(csv_path)
     return counts
 
 
-def refresh_journal_stats(root: Path, journals: list[Journal]) -> dict[str, int]:
+def refresh_journal_stats(root: Path, journals: list[Journal],
+                          per_journal_target: int = 20) -> dict[str, int]:
     """Rebuild from manifest and real files, without network requests."""
     records = load_existing_records(root, category="papers",
                                     permitted_journals={j.name for j in journals})
-    return save_journal_stats(root, journals, records)
+    return save_journal_stats(root, journals, records, per_journal_target)
+
+
+def save_feasibility_report(root: Path, states: list[dict], counts: dict[str, int],
+                            per_journal_target: int, dry_run: bool) -> None:
+    """Persist a per-journal source test; never infer success from a global total."""
+    rows = []
+    for state in states:
+        journal = state["journal"]
+        observed = state["previewed"] if dry_run else counts[journal.name]
+        rows.append({
+            "journal": journal.name,
+            "issn": journal.issn,
+            "group": journal.group,
+            "publisher": journal.publisher,
+            "mode": "metadata_preview" if dry_run else "pdf_download",
+            "eligible_candidates": state["previewed"] if dry_run else state["tried"],
+            "download_attempts": state["download_attempts"] if not dry_run else 0,
+            "new_downloads": state["success"],
+            "valid_local_pdfs": counts[journal.name],
+            "target": per_journal_target,
+            "target_met": observed >= per_journal_target,
+            "discovery_error": state.get("error", ""),
+        })
+    report = {
+        "version": "V6.1",
+        "updated_at": now_utc(),
+        "mode": "metadata_preview" if dry_run else "pdf_download",
+        "target_definition": (
+            "eligible OpenAlex OA article candidates per journal"
+            if dry_run else "valid unique downloaded PDFs per journal"
+        ),
+        "per_journal_target": per_journal_target,
+        "journals_tested": len(rows),
+        "journals_meeting_target": sum(row["target_met"] for row in rows),
+        "all_journals_meet_target": all(row["target_met"] for row in rows),
+        "journals": rows,
+    }
+    root.mkdir(parents=True, exist_ok=True)
+    json_path = root / "journal_feasibility_v6_1.json"
+    json_tmp = json_path.with_suffix(json_path.suffix + ".tmp")
+    json_tmp.write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n",
+                        encoding="utf-8")
+    json_tmp.replace(json_path)
+    csv_path = root / "journal_feasibility_v6_1.csv"
+    csv_tmp = csv_path.with_suffix(csv_path.suffix + ".tmp")
+    with csv_tmp.open("w", encoding="utf-8-sig", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=list(rows[0]))
+        writer.writeheader()
+        writer.writerows(rows)
+    csv_tmp.replace(csv_path)
 
 
 def print_journal_stats(counts: dict[str, int]) -> None:
@@ -602,33 +678,57 @@ def collect_papers(client: Client, args, root: Path) -> None:
     for row in old:
         seen_keys.update(identity_keys(row))
         seen_sha.add(str(row["sha256"]).lower())
-    target = args.limit
-    counts = save_journal_stats(root, journals, old)
+    per_journal_target = args.per_journal_target
+    counts = save_journal_stats(root, journals, old, per_journal_target)
     total = sum(counts.values())
-    print(f"[V6] Ten whitelist journals; old_valid={total}; target={target}", flush=True)
-    if total >= target and not args.dry_run:
-        print("[V6] Target already reached; nothing to download.", flush=True)
+    print(
+        f"[V6.1] {len(journals)} whitelist journals; old_valid={total}; "
+        f"per_journal_target={per_journal_target}",
+        flush=True,
+    )
+    if all(count >= per_journal_target for count in counts.values()) and not args.dry_run:
+        print("[V6.1] Every journal target already reached; nothing to download.", flush=True)
+        states = [{"journal": journal, "tried": 0, "previewed": 0,
+                   "download_attempts": 0, "success": 0, "error": ""}
+                  for journal in journals]
+        save_feasibility_report(root, states, counts, per_journal_target, False)
         print_journal_stats(counts)
         return
 
     errors = root / "errors.jsonl"
-    candidates_csv = root / "papers_v6_candidates.csv"
-    excluded_csv = root / "papers_v6_filtered_out.csv"
+    candidates_csv = root / "papers_v6_1_candidates.csv"
+    excluded_csv = root / "papers_v6_1_filtered_out.csv"
     states = [
         {"journal": j, "iterator": iter(journal_article_iterator(
             client, j, args.per_page, args.max_pages_per_journal, errors)),
-         "active": True, "success": 0, "tried": 0}
+         "active": args.dry_run or counts[j.name] < per_journal_target,
+         "success": 0, "tried": 0, "previewed": 0,
+         "download_attempts": 0, "error": ""}
         for j in journals
     ]
     successes = 0
     tried = 0
     previewed = 0
-    while tried < args.max_attempts and (previewed if args.dry_run else total) < target:
+
+    def all_targets_met() -> bool:
+        if args.dry_run or not args.download:
+            return all(state["previewed"] >= per_journal_target for state in states)
+        return all(counts[state["journal"].name] >= per_journal_target for state in states)
+
+    while tried < args.max_attempts and not all_targets_met():
         made_progress = False
         for state in states:
             if not state["active"]:
                 continue
             journal = state["journal"]
+            if ((args.dry_run or not args.download)
+                    and state["previewed"] >= per_journal_target):
+                state["active"] = False
+                continue
+            if (not args.dry_run and args.download
+                    and counts[journal.name] >= per_journal_target):
+                state["active"] = False
+                continue
             try:
                 item = next(state["iterator"])
             except StopIteration:
@@ -636,6 +736,7 @@ def collect_papers(client: Client, args, root: Path) -> None:
                 continue
             except (SourceError, requests.RequestException, ValueError, KeyError) as exc:
                 state["active"] = False
+                state["error"] = str(exc)
                 print(f"[WARN] {journal.name} discovery stopped: {exc}", flush=True)
                 log_error(errors, "papers", str(exc), journal=journal.name, phase="discovery")
                 continue
@@ -648,13 +749,19 @@ def collect_papers(client: Client, args, root: Path) -> None:
                 continue
             if args.dry_run or not args.download:
                 previewed += 1
+                state["previewed"] += 1
+                seen_keys.update(identity_keys(item))
                 paper_audit(candidates_csv, item, "eligible_not_downloaded")
-                print(f"[PREVIEW] {previewed}/{target}: {journal.name}: {item['title'][:75]}")
+                print(
+                    f"[PREVIEW] {journal.name} "
+                    f"{state['previewed']}/{per_journal_target}: {item['title'][:75]}"
+                )
                 continue
             downloaded = False
             last_error = "No candidate PDF succeeded"
             for location in item["pdf_locations"][:args.max_pdf_mirrors]:
                 url = location["url"]
+                state["download_attempts"] += 1
                 record_item = {**item,
                                "oa_version": location["version"],
                                "oa_pdf_host": location["oa_host"],
@@ -680,10 +787,14 @@ def collect_papers(client: Client, args, root: Path) -> None:
                     state["success"] += 1
                     counts[journal.name] += 1
                     old.append(record)
-                    save_journal_stats(root, journals, old)
+                    save_journal_stats(root, journals, old, per_journal_target)
                     print(f"[JOURNAL STATS] {journal.name}={counts[journal.name]} | TOTAL={total}", flush=True)
                     paper_audit(candidates_csv, record, "downloaded")
-                    print(f"[papers] {total}/{target} | {journal.name} | {record['title'][:78]}", flush=True)
+                    print(
+                        f"[papers] {journal.name} {counts[journal.name]}/{per_journal_target} "
+                        f"| total={total} | {record['title'][:78]}",
+                        flush=True,
+                    )
                     downloaded = True
                     break
                 except (SourceError, requests.RequestException, OSError, ValueError) as exc:
@@ -693,17 +804,39 @@ def collect_papers(client: Client, args, root: Path) -> None:
                     print(f"[SKIP] {journal.name}: {last_error}", flush=True)
             if not downloaded:
                 paper_audit(excluded_csv, item, "download_failed", last_error)
-            if total >= target:
-                break
-        if not made_progress or (args.dry_run and previewed >= target):
+        if not made_progress:
             break
-    counts = refresh_journal_stats(root, journals)
+    counts = refresh_journal_stats(root, journals, per_journal_target)
+    save_feasibility_report(root, states, counts, per_journal_target,
+                            args.dry_run or not args.download)
     print_journal_stats(counts)
-    print(f"[V6] valid_pdf_total={total} new_downloads={successes} previewed={previewed}", flush=True)
+    print(
+        f"[V6.1] valid_pdf_total={sum(counts.values())} "
+        f"new_downloads={successes} previewed={previewed}",
+        flush=True,
+    )
     for state in states:
-        print(f"  {state['journal'].name}: tried={state['tried']} downloaded={state['success']}")
-    if not args.dry_run and args.download and total < target:
-        print(f"[WARN] Target not reached: {total}/{target}. No PDF count was fabricated.", flush=True)
+        print(
+            f"  {state['journal'].name}: tried={state['tried']} "
+            f"previewed={state['previewed']} downloaded={state['success']} "
+            f"valid_local={counts[state['journal'].name]}"
+        )
+    unmet = [name for name, count in counts.items() if count < per_journal_target]
+    if not args.dry_run and args.download and unmet:
+        print(
+            f"[WARN] Per-journal target not reached for {len(unmet)} journals: "
+            + ", ".join(unmet)
+            + ". No PDF count was fabricated.",
+            flush=True,
+        )
+    preview_unmet = [state["journal"].name for state in states
+                     if state["previewed"] < per_journal_target]
+    if (args.dry_run or not args.download) and preview_unmet:
+        print(
+            f"[WARN] Metadata feasibility target not reached for {len(preview_unmet)} journals: "
+            + ", ".join(preview_unmet),
+            flush=True,
+        )
 
 
 def mit_candidates(client: Client, category: str) -> Iterator[dict]:
@@ -844,12 +977,21 @@ def audit_existing(root: Path, categories: list[str], journals: list[Journal]) -
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--categories", default="papers", help="papers,videos,teaching,methods,textbooks")
-    parser.add_argument("--limit", type=int, default=100, help="cumulative successful files per category")
+    parser.add_argument("--limit", type=int, default=100,
+                        help="cumulative successful files for non-paper categories")
+    parser.add_argument("--per-journal-target", type=int, default=20,
+                        help="minimum eligible candidates/PDFs required from every paper journal")
     parser.add_argument("--download", action="store_true", help="download originals (otherwise only preview)")
     parser.add_argument("--dry-run", action="store_true", help="preview eligible papers only")
     parser.add_argument("--out", type=Path, default=ROOT / "chemistry_dataset" / "papers_dataset")
-    parser.add_argument("--journals-file", type=Path, default=ROOT / "config" / "journals_v6.json")
+    parser.add_argument("--journals-file", type=Path,
+                        default=ROOT / "config" / "journals_v6_1.json")
     parser.add_argument("--contact", default="", help="optional polite contact email for User-Agent")
+    parser.add_argument(
+        "--openalex-api-key",
+        default=os.environ.get("OPENALEX_API_KEY", ""),
+        help="OpenAlex API key; defaults to OPENALEX_API_KEY (never written to output)",
+    )
     parser.add_argument("--max-file-mb", type=int, default=500)
     parser.add_argument("--max-pdf-mirrors", type=int, default=3)
     parser.add_argument("--max-pages-per-journal", type=int, default=8)
@@ -863,7 +1005,8 @@ def main() -> None:
     cats = [x.strip() for x in args.categories.split(",") if x.strip()]
     if not cats or not set(cats).issubset(CATEGORY_CHOICES):
         parser.error(f"Unknown categories; allowed: {sorted(CATEGORY_CHOICES)}")
-    if any(x <= 0 for x in (args.limit, args.max_file_mb, args.max_pdf_mirrors,
+    if any(x <= 0 for x in (args.limit, args.per_journal_target,
+                             args.max_file_mb, args.max_pdf_mirrors,
                              args.max_pages_per_journal, args.per_page, args.max_attempts)):
         parser.error("Numeric limits must all be greater than zero")
     if args.per_page > 100:
@@ -874,14 +1017,17 @@ def main() -> None:
     if args.stats_only:
         if "papers" not in cats:
             parser.error("--stats-only requires --categories papers")
-        print_journal_stats(refresh_journal_stats(args.out, journals))
+        print_journal_stats(refresh_journal_stats(
+            args.out, journals, args.per_journal_target))
         return
     if args.audit_only:
         audit_existing(args.out, cats, journals)
         return
-    client = Client(args.contact)
+    client = Client(args.contact, openalex_api_key=args.openalex_api_key)
     for category in cats:
-        print(f"\n=== V6 {category} target={args.limit} ===", flush=True)
+        target_label = (f"per_journal_target={args.per_journal_target}"
+                        if category == "papers" else f"target={args.limit}")
+        print(f"\n=== V6.1 {category} {target_label} ===", flush=True)
         try:
             if category == "papers":
                 collect_papers(client, args, args.out)
