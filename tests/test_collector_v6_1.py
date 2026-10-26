@@ -24,7 +24,7 @@ class CollectorV61Tests(unittest.TestCase):
     def test_whitelist_rejects_wrong_size(self):
         rows = json.loads(JOURNALS.read_text(encoding="utf-8"))
         with tempfile.TemporaryDirectory() as tmp:
-            path = Path(tmp) / "journals.json"
+            path = Path(tmp) / "journals_v6_1.json"
             path.write_text(json.dumps(rows[:-1]), encoding="utf-8")
             with self.assertRaisesRegex(ValueError, "exactly 20"):
                 collector.load_journals(path)
@@ -64,7 +64,7 @@ class CollectorV61Tests(unittest.TestCase):
             with redirect_stdout(io.StringIO()):
                 collector.collect_papers(object(), args, out)
             report = json.loads(
-                (out / "journal_feasibility_v6_1.json").read_text(encoding="utf-8")
+                (out / "journal_feasibility_v6_2.json").read_text(encoding="utf-8")
             )
             self.assertTrue(report["all_journals_meet_target"])
             self.assertEqual(20, report["journals_meeting_target"])

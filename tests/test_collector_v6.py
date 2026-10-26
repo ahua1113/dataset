@@ -153,7 +153,7 @@ class CollectorV6Tests(unittest.TestCase):
             root = Path(tmp)
             args = SimpleNamespace(
                 journals_file=ROOT / "config/journals_v6.json",
-                limit=2, dry_run=False, download=True, max_file_mb=5,
+                limit=2, per_journal_target=1, dry_run=False, download=True, max_file_mb=5,
                 max_pdf_mirrors=2, per_page=50, max_pages_per_journal=1, max_attempts=100)
             c.collect_papers(FakeOpenAlexClient(pdf), args, root)
             rows = [json.loads(line) for line in (root / "manifest.jsonl").read_text().splitlines()]
@@ -162,7 +162,7 @@ class CollectorV6Tests(unittest.TestCase):
             self.assertEqual(rows[0]["status"], "downloaded")
             self.assertEqual(rows[0]["oa_pdf_source"], "OA_repository")
             self.assertEqual(rows[0]["oa_version"], "acceptedVersion")
-            excluded = (root / "papers_v6_filtered_out.csv").read_text(encoding="utf-8-sig")
+            excluded = (root / "papers_v6_2_filtered_out.csv").read_text(encoding="utf-8-sig")
             self.assertIn("duplicate_sha256", excluded)
 
     def test_candidate_url_is_part_of_predownload_dedup(self):
@@ -181,7 +181,7 @@ class CollectorV6Tests(unittest.TestCase):
                 "file": "raw/papers/old.pdf", "bytes": len(content),
                 "sha256": c.hash_file(root / "raw" / "papers" / "old.pdf"),
             })
-            with self.assertRaisesRegex(RuntimeError, "non-V6 journal"):
+            with self.assertRaisesRegex(RuntimeError, "non-whitelist journal"):
                 c.load_existing_records(root, category="papers", permitted_journals={j.name for j in self.journals})
 
 

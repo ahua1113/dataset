@@ -1,14 +1,15 @@
 #!/usr/bin/env python3
-"""Chemistry Source Collector V6.1.
+"""Chemistry Source Collector V6.2 OA-only journal expansion stage.
 
-Papers: twenty manually approved chemistry journals, OpenAlex OA PDF metadata,
-        per-journal minimum targets, global metadata and SHA-256 deduplication.
+Papers: thirty-four feasibility-tested chemistry journals, OpenAlex OA PDF metadata,
+        traceable journal metadata, global metadata and SHA-256 deduplication.
 No preprint-source discovery and no publisher-login/paywall bypassing logic.
-The V5.3 MIT-OCW videos/teaching and optional methods/textbooks remain usable.
+The next stage will replace per-journal quotas with discipline-level quotas.
+MIT-OCW videos/teaching and optional methods/textbooks remain usable.
 
 Quick start:
-    python collector.py --categories papers --per-journal-target 20 --download
-    python collector.py --categories papers --per-journal-target 20 --dry-run
+    python collector.py --categories papers --per-journal-target 1 --dry-run
+    python collector.py --categories papers --stats-only
 """
 from __future__ import annotations
 
@@ -30,14 +31,19 @@ import requests
 from bs4 import BeautifulSoup
 
 ROOT = Path(__file__).resolve().parent
-COLLECTOR_VERSION = "6.1"
-WHITELIST_SIZE = 20
+COLLECTOR_VERSION = "6.2"
+WHITELIST_SIZE = 34
+CONFIG_WHITELIST_SIZES = {
+    "journals_v6.json": 10,
+    "journals_v6_1.json": 20,
+    "journals_v6_2.json": 34,
+}
 OPENALEX_SOURCES = "https://api.openalex.org/sources"
 OPENALEX_WORKS = "https://api.openalex.org/works"
 EPA_INDEX = "https://www.epa.gov/hw-sw846/sw-846-compendium"
 
 # The only sources for PAPER discovery are ISSN-verified journals loaded from
-# config/journals_v6_1.json. There is deliberately no preprint crawler.
+# config/journals_v6_2.json. There is deliberately no preprint crawler.
 CATEGORY_CHOICES = {"papers", "videos", "teaching", "methods", "textbooks"}
 EXCLUDED_ARTICLE_TITLES = re.compile(
     r"^\s*(?:publisher(?:'s|’s)?\s+correction|author\s+correction|"
@@ -132,10 +138,15 @@ def load_journals(path: Path) -> list[Journal]:
     if not path.is_file():
         raise FileNotFoundError(f"Journal whitelist missing: {path}")
     data = json.loads(path.read_text(encoding="utf-8"))
-    if not isinstance(data, list) or not (1 <= len(data) <= WHITELIST_SIZE):
+    expected_size = CONFIG_WHITELIST_SIZES.get(path.name)
+    if not isinstance(data, list) or not data:
+        raise ValueError("Journal whitelist must be a non-empty JSON array")
+    if expected_size is not None and len(data) != expected_size:
         raise ValueError(
-            f"V6.1 journal whitelist must contain exactly {WHITELIST_SIZE} journals"
+            f"{path.name} journal whitelist must contain exactly {expected_size} journals"
         )
+    if expected_size is None and len(data) > WHITELIST_SIZE:
+        raise ValueError(f"Custom journal whitelist cannot exceed {WHITELIST_SIZE} journals")
     result = []
     names, issns = set(), set()
     for row in data:
@@ -345,7 +356,7 @@ def article_candidate(work: dict, journal: Journal, source_id: str) -> tuple[dic
         "category": "papers", "resource_kind": "research_article",
         "title": title, "journal": journal.name, "journal_issn": journal.issn,
         "journal_group": journal.group, "journal_whitelist_origin": journal.origin,
-        "publisher": journal.publisher, "source_group": "v6_1_twenty_journals",
+        "publisher": journal.publisher, "source_group": "v6_2_oa_journals",
         "source_page": article_page, "doi": doi,
         "openalex_id": str(work.get("id") or ""),
         "openalex_source_id": source_id,
@@ -432,8 +443,8 @@ def load_existing_records(root: Path, *, category: str,
             continue
         if permitted_journals is not None and row.get("journal") not in permitted_journals:
             raise RuntimeError(
-                f"Existing manifest contains a non-V6.1 journal record: {row.get('journal')!r}. "
-                "Use an empty V6.1 output folder; the program will NOT erase legacy data."
+                f"Existing manifest contains a non-whitelist journal record: {row.get('journal')!r}. "
+                "Use an empty output folder; the program will NOT erase legacy data."
             )
         rel = Path(str(row.get("file") or ""))
         if not rel.parts or rel.is_absolute() or ".." in rel.parts:
@@ -576,7 +587,7 @@ def save_journal_stats(root: Path, journals: list[Journal], records: list[dict],
         "percentage": round(100 * counts[journal.name] / total, 2) if total else 0.0,
     } for journal in journals]
     report = {
-        "version": "V6.1",
+        "version": "V6.2",
         "updated_at": updated_at,
         "counting_rule": "unique SHA-256, status=downloaded, manifest record and local file exist with matching recorded size",
         "per_journal_target": per_journal_target,
@@ -635,7 +646,7 @@ def save_feasibility_report(root: Path, states: list[dict], counts: dict[str, in
             "discovery_error": state.get("error", ""),
         })
     report = {
-        "version": "V6.1",
+        "version": "V6.2",
         "updated_at": now_utc(),
         "mode": "metadata_preview" if dry_run else "pdf_download",
         "target_definition": (
@@ -649,12 +660,12 @@ def save_feasibility_report(root: Path, states: list[dict], counts: dict[str, in
         "journals": rows,
     }
     root.mkdir(parents=True, exist_ok=True)
-    json_path = root / "journal_feasibility_v6_1.json"
+    json_path = root / "journal_feasibility_v6_2.json"
     json_tmp = json_path.with_suffix(json_path.suffix + ".tmp")
     json_tmp.write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n",
                         encoding="utf-8")
     json_tmp.replace(json_path)
-    csv_path = root / "journal_feasibility_v6_1.csv"
+    csv_path = root / "journal_feasibility_v6_2.csv"
     csv_tmp = csv_path.with_suffix(csv_path.suffix + ".tmp")
     with csv_tmp.open("w", encoding="utf-8-sig", newline="") as f:
         writer = csv.DictWriter(f, fieldnames=list(rows[0]))
@@ -684,12 +695,12 @@ def collect_papers(client: Client, args, root: Path) -> None:
     counts = save_journal_stats(root, journals, old, per_journal_target)
     total = sum(counts.values())
     print(
-        f"[V6.1] {len(journals)} whitelist journals; old_valid={total}; "
+        f"[V6.2] {len(journals)} whitelist journals; old_valid={total}; "
         f"per_journal_target={per_journal_target}",
         flush=True,
     )
     if all(count >= per_journal_target for count in counts.values()) and not args.dry_run:
-        print("[V6.1] Every journal target already reached; nothing to download.", flush=True)
+        print("[V6.2] Every journal target already reached; nothing to download.", flush=True)
         states = [{"journal": journal, "tried": 0, "previewed": 0,
                    "download_attempts": 0, "success": 0, "error": ""}
                   for journal in journals]
@@ -698,8 +709,8 @@ def collect_papers(client: Client, args, root: Path) -> None:
         return
 
     errors = root / "errors.jsonl"
-    candidates_csv = root / "papers_v6_1_candidates.csv"
-    excluded_csv = root / "papers_v6_1_filtered_out.csv"
+    candidates_csv = root / "papers_v6_2_candidates.csv"
+    excluded_csv = root / "papers_v6_2_filtered_out.csv"
     states = [
         {"journal": j, "iterator": iter(journal_article_iterator(
             client, j, args.per_page, args.max_pages_per_journal, errors)),
@@ -813,7 +824,7 @@ def collect_papers(client: Client, args, root: Path) -> None:
                             args.dry_run or not args.download)
     print_journal_stats(counts)
     print(
-        f"[V6.1] valid_pdf_total={sum(counts.values())} "
+        f"[V6.2] valid_pdf_total={sum(counts.values())} "
         f"new_downloads={successes} previewed={previewed}",
         flush=True,
     )
@@ -988,7 +999,7 @@ def main() -> None:
     parser.add_argument("--dry-run", action="store_true", help="preview eligible papers only")
     parser.add_argument("--out", type=Path, default=ROOT / "chemistry_dataset" / "papers_dataset")
     parser.add_argument("--journals-file", type=Path,
-                        default=ROOT / "config" / "journals_v6_1.json")
+                        default=ROOT / "config" / "journals_v6_2.json")
     parser.add_argument("--contact", default="", help="optional polite contact email for User-Agent")
     parser.add_argument(
         "--openalex-api-key",
@@ -1030,7 +1041,7 @@ def main() -> None:
     for category in cats:
         target_label = (f"per_journal_target={args.per_journal_target}"
                         if category == "papers" else f"target={args.limit}")
-        print(f"\n=== V6.1 {category} {target_label} ===", flush=True)
+        print(f"\n=== V6.2 {category} {target_label} ===", flush=True)
         try:
             if category == "papers":
                 collect_papers(client, args, args.out)

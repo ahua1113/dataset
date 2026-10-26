@@ -1,0 +1,13 @@
+{
+  "version": "V6.2",
+  "reason": "OA PDF feasibility test failed",
+  "threshold": 1,
+  "journals": [
+    "Angewandte Chemie International Edition",
+    "Science Advances",
+    "Advanced Functional Materials",
+    "Advanced Science",
+    "Chemical Reviews",
+    "Accounts of Chemical Research"
+  ]
+}

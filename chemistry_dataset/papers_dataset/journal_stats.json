@@ -1,190 +1,316 @@
 {
-  "version": "V6.1",
-  "updated_at": "2026-10-22T07:46:04.900212+00:00",
+  "version": "V6.2",
+  "updated_at": "2026-10-26T04:37:00.921229+00:00",
   "counting_rule": "unique SHA-256, status=downloaded, manifest record and local file exist with matching recorded size",
-  "per_journal_target": 1,
-  "journals_meeting_target": 20,
-  "total_papers": 398,
+  "per_journal_target": 10,
+  "journals_meeting_target": 13,
+  "total_papers": 449,
   "journals": [
     {
       "journal": "Nature Chemistry",
       "issn": "1755-4349",
       "publisher": "Nature Portfolio",
       "count": 61,
-      "target": 1,
+      "target": 10,
       "target_met": true,
-      "percentage": 15.33
+      "percentage": 13.59
     },
     {
       "journal": "Communications Chemistry",
       "issn": "2399-3669",
       "publisher": "Nature Portfolio",
       "count": 60,
-      "target": 1,
+      "target": 10,
       "target_met": true,
-      "percentage": 15.08
+      "percentage": 13.36
     },
     {
       "journal": "Nature Catalysis",
       "issn": "2520-1158",
       "publisher": "Nature Portfolio",
       "count": 55,
-      "target": 1,
+      "target": 10,
       "target_met": true,
-      "percentage": 13.82
+      "percentage": 12.25
     },
     {
       "journal": "Nature Synthesis",
       "issn": "2731-0582",
       "publisher": "Nature Portfolio",
       "count": 58,
-      "target": 1,
+      "target": 10,
       "target_met": true,
-      "percentage": 14.57
+      "percentage": 12.92
     },
     {
       "journal": "Nature Chemical Biology",
       "issn": "1552-4469",
       "publisher": "Nature Portfolio",
       "count": 58,
-      "target": 1,
+      "target": 10,
       "target_met": true,
-      "percentage": 14.57
+      "percentage": 12.92
     },
     {
       "journal": "ACS Central Science",
       "issn": "2374-7951",
       "publisher": "American Chemical Society",
       "count": 1,
-      "target": 1,
-      "target_met": true,
-      "percentage": 0.25
+      "target": 10,
+      "target_met": false,
+      "percentage": 0.22
     },
     {
       "journal": "Materials Horizons",
       "issn": "2051-6355",
       "publisher": "Royal Society of Chemistry",
-      "count": 1,
-      "target": 1,
-      "target_met": true,
-      "percentage": 0.25
+      "count": 2,
+      "target": 10,
+      "target_met": false,
+      "percentage": 0.45
     },
     {
       "journal": "Chem",
       "issn": "2451-9294",
       "publisher": "Cell Press / Elsevier",
       "count": 7,
-      "target": 1,
-      "target_met": true,
-      "percentage": 1.76
+      "target": 10,
+      "target_met": false,
+      "percentage": 1.56
     },
     {
       "journal": "Chemical Science",
       "issn": "2041-6539",
       "publisher": "Royal Society of Chemistry",
       "count": 3,
-      "target": 1,
-      "target_met": true,
-      "percentage": 0.75
+      "target": 10,
+      "target_met": false,
+      "percentage": 0.67
     },
     {
       "journal": "Journal of the American Chemical Society",
       "issn": "1520-5126",
       "publisher": "American Chemical Society",
       "count": 2,
-      "target": 1,
-      "target_met": true,
-      "percentage": 0.5
+      "target": 10,
+      "target_met": false,
+      "percentage": 0.45
     },
     {
       "journal": "Nature Energy",
       "issn": "2058-7546",
       "publisher": "Nature Portfolio",
       "count": 20,
-      "target": 1,
+      "target": 10,
       "target_met": true,
-      "percentage": 5.03
+      "percentage": 4.45
     },
     {
       "journal": "Nature Materials",
       "issn": "1476-4660",
       "publisher": "Nature Portfolio",
       "count": 20,
-      "target": 1,
+      "target": 10,
       "target_met": true,
-      "percentage": 5.03
+      "percentage": 4.45
     },
     {
       "journal": "Nature Nanotechnology",
       "issn": "1748-3395",
       "publisher": "Nature Portfolio",
       "count": 20,
-      "target": 1,
+      "target": 10,
       "target_met": true,
-      "percentage": 5.03
+      "percentage": 4.45
     },
     {
       "journal": "Joule",
       "issn": "2542-4351",
       "publisher": "Cell Press / Elsevier",
       "count": 3,
-      "target": 1,
-      "target_met": true,
-      "percentage": 0.75
+      "target": 10,
+      "target_met": false,
+      "percentage": 0.67
     },
     {
       "journal": "Energy & Environmental Science",
       "issn": "1754-5706",
       "publisher": "Royal Society of Chemistry",
       "count": 3,
-      "target": 1,
-      "target_met": true,
-      "percentage": 0.75
+      "target": 10,
+      "target_met": false,
+      "percentage": 0.67
     },
     {
       "journal": "ACS Catalysis",
       "issn": "2155-5435",
       "publisher": "American Chemical Society",
       "count": 2,
-      "target": 1,
-      "target_met": true,
-      "percentage": 0.5
+      "target": 10,
+      "target_met": false,
+      "percentage": 0.45
     },
     {
       "journal": "Nature Chemical Engineering",
       "issn": "2948-1198",
       "publisher": "Nature Portfolio",
       "count": 20,
-      "target": 1,
+      "target": 10,
       "target_met": true,
-      "percentage": 5.03
+      "percentage": 4.45
     },
     {
       "journal": "Advanced Energy Materials",
       "issn": "1614-6840",
       "publisher": "Wiley",
       "count": 1,
-      "target": 1,
-      "target_met": true,
-      "percentage": 0.25
+      "target": 10,
+      "target_met": false,
+      "percentage": 0.22
     },
     {
       "journal": "ACS Energy Letters",
       "issn": "2380-8195",
       "publisher": "American Chemical Society",
       "count": 2,
-      "target": 1,
-      "target_met": true,
-      "percentage": 0.5
+      "target": 10,
+      "target_met": false,
+      "percentage": 0.45
     },
     {
       "journal": "ACS Nano",
       "issn": "1936-0851",
       "publisher": "American Chemical Society",
       "count": 1,
-      "target": 1,
+      "target": 10,
+      "target_met": false,
+      "percentage": 0.22
+    },
+    {
+      "journal": "Nature Sustainability",
+      "issn": "2398-9629",
+      "publisher": "Nature Portfolio",
+      "count": 10,
+      "target": 10,
       "target_met": true,
-      "percentage": 0.25
+      "percentage": 2.23
+    },
+    {
+      "journal": "Advanced Materials",
+      "issn": "1521-4095",
+      "publisher": "Wiley",
+      "count": 0,
+      "target": 10,
+      "target_met": false,
+      "percentage": 0.0
+    },
+    {
+      "journal": "Nature Communications",
+      "issn": "2041-1723",
+      "publisher": "Nature Portfolio",
+      "count": 10,
+      "target": 10,
+      "target_met": true,
+      "percentage": 2.23
+    },
+    {
+      "journal": "Proceedings of the National Academy of Sciences of the United States of America",
+      "issn": "1091-6490",
+      "publisher": "National Academy of Sciences",
+      "count": 0,
+      "target": 10,
+      "target_met": false,
+      "percentage": 0.0
+    },
+    {
+      "journal": "National Science Review",
+      "issn": "2053-714X",
+      "publisher": "Oxford University Press",
+      "count": 2,
+      "target": 10,
+      "target_met": false,
+      "percentage": 0.45
+    },
+    {
+      "journal": "Materials Today",
+      "issn": "1369-7021",
+      "publisher": "Elsevier",
+      "count": 0,
+      "target": 10,
+      "target_met": false,
+      "percentage": 0.0
+    },
+    {
+      "journal": "Nano Letters",
+      "issn": "1530-6992",
+      "publisher": "American Chemical Society",
+      "count": 0,
+      "target": 10,
+      "target_met": false,
+      "percentage": 0.0
+    },
+    {
+      "journal": "Chemistry of Materials",
+      "issn": "1520-5002",
+      "publisher": "American Chemical Society",
+      "count": 1,
+      "target": 10,
+      "target_met": false,
+      "percentage": 0.22
+    },
+    {
+      "journal": "Journal of Materials Chemistry A",
+      "issn": "2050-7496",
+      "publisher": "Royal Society of Chemistry",
+      "count": 2,
+      "target": 10,
+      "target_met": false,
+      "percentage": 0.45
+    },
+    {
+      "journal": "Chemical Engineering Journal",
+      "issn": "1385-8947",
+      "publisher": "Elsevier",
+      "count": 1,
+      "target": 10,
+      "target_met": false,
+      "percentage": 0.22
+    },
+    {
+      "journal": "Matter",
+      "issn": "2590-2385",
+      "publisher": "Cell Press / Elsevier",
+      "count": 3,
+      "target": 10,
+      "target_met": false,
+      "percentage": 0.67
+    },
+    {
+      "journal": "Chemical Society Reviews",
+      "issn": "1460-4744",
+      "publisher": "Royal Society of Chemistry",
+      "count": 1,
+      "target": 10,
+      "target_met": false,
+      "percentage": 0.22
+    },
+    {
+      "journal": "Nature Reviews Chemistry",
+      "issn": "2397-3358",
+      "publisher": "Nature Portfolio",
+      "count": 10,
+      "target": 10,
+      "target_met": true,
+      "percentage": 2.23
+    },
+    {
+      "journal": "Nature Reviews Materials",
+      "issn": "2058-8437",
+      "publisher": "Nature Portfolio",
+      "count": 10,
+      "target": 10,
+      "target_met": true,
+      "percentage": 2.23
     }
   ]
 }
