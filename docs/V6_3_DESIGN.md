@@ -49,6 +49,7 @@ V6.3 将“论文质量来源”和“数据集覆盖目标”分开：期刊白
 - `policy.py`：期刊运行策略；
 - `storage.py`：本地文件、manifest和审计记录；
 - `disciplines.py`：学科分类、配额与报告；
+- `analysis.py`：历史论文目录合并、去重和量化统计；
 - `feasibility.py`：逐刊测试；
 - `papers.py`：按学科正式采集；
 - `resources.py`：视频、讲义、方法和教材；
