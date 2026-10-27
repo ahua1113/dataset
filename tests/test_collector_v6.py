@@ -160,9 +160,9 @@ class CollectorV6Tests(unittest.TestCase):
             # Two DOIs, but identical PDF bytes; only one stored.
             self.assertEqual(len(rows), 1)
             self.assertEqual(rows[0]["status"], "downloaded")
-            self.assertEqual(rows[0]["oa_pdf_source"], "OA_repository")
+            self.assertEqual(rows[0]["oa_pdf_source"], "institutional_repository")
             self.assertEqual(rows[0]["oa_version"], "acceptedVersion")
-            excluded = (root / "papers_v6_2_filtered_out.csv").read_text(encoding="utf-8-sig")
+            excluded = (root / "papers_v6_3_filtered_out.csv").read_text(encoding="utf-8-sig")
             self.assertIn("duplicate_sha256", excluded)
 
     def test_candidate_url_is_part_of_predownload_dedup(self):

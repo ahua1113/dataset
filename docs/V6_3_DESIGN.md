@@ -14,8 +14,11 @@ V6.3 将“论文质量来源”和“数据集覆盖目标”分开：期刊白
 4. 使用标题、主题、关键词、摘要和期刊组生成唯一主学科及次学科；
 5. 检查学科缺口、单刊上限和综述上限；
 6. 聚合 OpenAlex 与 Unpaywall 的OA位置并建立兜底链；
-7. 依次下载，核验HTTPS、robots.txt、响应类型、PDF签名、大小和SHA-256；
+7. 按期刊优先级和尝试预算依次下载，核验HTTPS、robots.txt、响应类型、PDF签名、大小和SHA-256；
 8. 成功后写入 manifest，并原子更新学科报告和来源矩阵。
+
+连续的401/403/429或robots拒绝会累计到域名熔断器。达到阈值后，本轮直接跳过该域名，
+但仍可继续尝试同一论文的机构库、预印本或其他合法OA位置。
 
 ## 配额口径
 
@@ -31,6 +34,26 @@ V6.3 将“论文质量来源”和“数据集覆盖目标”分开：期刊白
 - `validated`：V6.2保留的34刊；
 - `candidate`：V6.3新增的8本高OA期刊，每刊可用性测试阈值10篇；
 - `all`：两组共同用于采集，仅建议在候选刊通过测试后启用。
+
+期刊白名单与运行策略分离。`journals_v6_3.json` 保留全部42刊以维护溯源，
+`journal_policy_v6_3.json` 决定默认启用状态、执行优先级和单刊下载尝试预算。
+根据首轮测试，ACS Omega、RSC Advances 和 ChemistryOpen 默认停用；
+`--include-low-yield-journals` 只用于有意复测，不作为正式采集默认值。
+
+## 模块边界
+
+- `models.py`：配置模型和输入校验；
+- `client.py`：网络边界、限速、robots与熔断；
+- `discovery.py`：论文身份和OA位置发现；
+- `policy.py`：期刊运行策略；
+- `storage.py`：本地文件、manifest和审计记录；
+- `disciplines.py`：学科分类、配额与报告；
+- `feasibility.py`：逐刊测试；
+- `papers.py`：按学科正式采集；
+- `resources.py`：视频、讲义、方法和教材；
+- `cli.py`：参数解析和流程调度。
+
+根目录 `collector.py` 和 `v6_3_core.py` 仅承担旧命令/导入兼容，不再承载实现。
 
 ## OA来源与版本
 

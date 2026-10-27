@@ -1,0 +1,64 @@
+{
+  "version": "V6.3",
+  "source_report": "chemistry_dataset/v6_3_feasibility/journal_feasibility_v6_3.json",
+  "defaults": {
+    "enabled": true,
+    "priority": 50,
+    "max_download_attempts": 80
+  },
+  "journals": {
+    "Beilstein Journal of Organic Chemistry": {
+      "priority": 10,
+      "max_download_attempts": 20,
+      "measured_attempts": 10,
+      "measured_successes": 10
+    },
+    "Beilstein Journal of Nanotechnology": {
+      "priority": 10,
+      "max_download_attempts": 20,
+      "measured_attempts": 10,
+      "measured_successes": 10
+    },
+    "Journal of Cheminformatics": {
+      "priority": 15,
+      "max_download_attempts": 40,
+      "measured_attempts": 18,
+      "measured_successes": 10
+    },
+    "JACS Au": {
+      "priority": 30,
+      "max_download_attempts": 80,
+      "reason": "Reached 10 PDFs but only 10/158 attempts succeeded.",
+      "measured_attempts": 158,
+      "measured_successes": 10
+    },
+    "ACS Materials Au": {
+      "priority": 30,
+      "max_download_attempts": 80,
+      "reason": "Reached 10 PDFs but only 10/147 attempts succeeded.",
+      "measured_attempts": 147,
+      "measured_successes": 10
+    },
+    "ACS Omega": {
+      "enabled": false,
+      "priority": 90,
+      "reason": "Disabled by default after only 6/233 successful PDF attempts.",
+      "measured_attempts": 233,
+      "measured_successes": 6
+    },
+    "RSC Advances": {
+      "enabled": false,
+      "priority": 90,
+      "reason": "Disabled by default after only 2/358 successful PDF attempts.",
+      "measured_attempts": 358,
+      "measured_successes": 2
+    },
+    "ChemistryOpen": {
+      "enabled": false,
+      "priority": 90,
+      "reason": "Disabled by default after only 5/197 successful PDF attempts.",
+      "measured_attempts": 197,
+      "measured_successes": 5
+    }
+  }
+}

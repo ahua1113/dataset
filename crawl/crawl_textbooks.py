@@ -13,7 +13,6 @@ cmd = [
     "--download",
     "--books-csv", str(ROOT / "config" / "textbook_seeds.csv"),
     "--out", str(ROOT / "chemistry_dataset" / "textbooks_dataset"),
-    "--contact", "1316400989@qq.com",
 ]
 
 subprocess.run(cmd, cwd=ROOT, check=True)

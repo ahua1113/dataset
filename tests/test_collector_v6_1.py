@@ -64,7 +64,7 @@ class CollectorV61Tests(unittest.TestCase):
             with redirect_stdout(io.StringIO()):
                 collector.collect_papers(object(), args, out)
             report = json.loads(
-                (out / "journal_feasibility_v6_2.json").read_text(encoding="utf-8")
+                (out / "journal_feasibility_v6_3.json").read_text(encoding="utf-8")
             )
             self.assertTrue(report["all_journals_meet_target"])
             self.assertEqual(20, report["journals_meeting_target"])

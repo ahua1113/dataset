@@ -27,7 +27,37 @@ V6.3 只采集无需登录即可合法访问的 OA 资源，不包含出版商�
 7. Beilstein Journal of Nanotechnology
 8. Journal of Cheminformatics
 
-这8本期刊的状态为 `candidate`，每刊可下载性测试阈值为10篇。建议通过测试后再使用 `--journal-stage all` 参与正式采集。V6.2 中因 OA PDF 测试失败剔除的6本期刊不会被重新加入。
+这8本期刊仍保留在白名单中以便完整溯源，但正式运行还会读取
+`config/journal_policy_v6_3.json`：
+
+- 默认启用：JACS Au、ACS Materials Au、两本 Beilstein 期刊和 Journal of Cheminformatics；
+- 默认停用：ACS Omega、RSC Advances、ChemistryOpen；
+- 被停用期刊不会删除，可用 `--include-low-yield-journals` 显式重新测试。
+
+该策略来自 V6.3 真实 PDF 测试，而不是元数据候选数量。默认停用的三本期刊分别只成功
+6/233、2/358 和 5/197 次。JACS Au 与 ACS Materials Au 虽达到10篇，但设置了单刊尝试
+预算，避免再次产生数百次低收益请求。
+
+## 项目结构
+
+`collector.py` 只保留兼容入口，主要实现已拆分到 `chemistry_collector/`：
+
+```text
+chemistry_collector/
+├── cli.py           # 命令行参数与流程调度
+├── client.py        # HTTPS、robots.txt、限速和域名熔断
+├── models.py        # 期刊配置模型与校验
+├── policy.py        # 期刊优先级、排除规则与尝试预算
+├── discovery.py     # OpenAlex/Unpaywall发现与论文筛选
+├── disciplines.py   # 学科分类、配额和报告
+├── feasibility.py   # 逐刊可行性测试
+├── papers.py        # 正式按学科采集
+├── storage.py       # 下载、SHA-256、manifest和CSV审计
+├── reports.py       # 期刊统计报告
+└── resources.py     # 视频、讲义、方法和教材
+```
+
+`v6_3_core.py` 作为旧导入路径的兼容层保留。
 
 ## 多来源OA兜底
 
@@ -78,14 +108,17 @@ V6.3 只采集无需登录即可合法访问的 OA 资源，不包含出版商�
 python -m pip install -r requirements.txt
 ```
 
-建议设置OpenAlex API Key，并提供联系邮箱供礼貌性 User-Agent 和 Unpaywall 使用：
+建议设置 OpenAlex API Key，并通过环境变量提供联系邮箱供礼貌性 User-Agent 和
+Unpaywall 使用：
 
 ```cmd
-setx OPENALEX_API_KEY ""
+setx OPENALEX_API_KEY "你的_API_Key"
+setx COLLECTOR_CONTACT_EMAIL "你的邮箱"
 ```
 
 ```powershell
-$env:OPENALEX_API_KEY=""
+$env:OPENALEX_API_KEY="你的_API_Key"
+$env:COLLECTOR_CONTACT_EMAIL="你的邮箱"
 ```
 
 邮箱不会写入输出文件。
@@ -97,24 +130,25 @@ $env:OPENALEX_API_KEY=""
 先预览元数据：
 
 ```powershell
-python collector.py --categories papers --feasibility-only --journal-stage candidate --per-journal-target 10 --dry-run --contact 1316400989@qq.com
+python collector.py --categories papers --feasibility-only --journal-stage candidate --per-journal-target 10 --dry-run
 ```
 
 再执行真实PDF可下载性测试：
 
 ```powershell
-python collector.py --categories papers --feasibility-only --journal-stage candidate --per-journal-target 10 --download --contact 1316400989@qq.com --out chemistry_dataset/v6_3_feasibility
+python collector.py --categories papers --feasibility-only --journal-stage candidate --per-journal-target 10 --download --out chemistry_dataset/v6_3_feasibility
 ```
 
-只有 `journal_feasibility_v6_3.json` 中达到10篇的期刊才应晋级正式来源池。
+默认仅测试当前仍启用的5本候选刊。如确需复测全部8本，增加
+`--include-low-yield-journals`。
 
 ### 2. 预览全学科采集结果
 
 ```powershell
-python collector.py --categories papers --journal-stage all --dry-run --contact 1316400989@qq.com --out chemistry_dataset/v6_3_preview
+python collector.py --categories papers --journal-stage all --dry-run --out chemistry_dataset/v6_3_preview
 ```
 
-也可以直接运行安全入口（默认不下载PDF）：
+也可以直接运行当前正式采集入口（会下载PDF）：
 
 ```powershell
 python crawl/crawl_papers.py
@@ -123,13 +157,13 @@ python crawl/crawl_papers.py
 ### 3. 正式采集
 
 ```powershell
-python collector.py --categories papers --journal-stage all --download --contact 1316400989@qq.com --out chemistry_dataset/v6_3_papers
+python collector.py --categories papers --journal-stage all --download --out chemistry_dataset/v6_3_papers
 ```
 
 如果新增候选刊尚未完成测试，先使用34本已验证期刊：
 
 ```powershell
-python collector.py --categories papers --journal-stage validated --download --contact 1316400989@qq.com --out chemistry_dataset/v6_3_papers
+python collector.py --categories papers --journal-stage validated --download --out chemistry_dataset/v6_3_papers
 ```
 
 ### 4. 离线统计与文件审计
@@ -167,6 +201,8 @@ chemistry_dataset/v6_3_papers/
 - 仅HTTPS；尊重 robots.txt；限制单域请求频率；
 - 不保存账号、Cookie、校园网凭据或认证令牌；
 - 403、429、登录跳转和非PDF响应会记录后跳过；
+- 同一域名连续发生5次访问拒绝后自动熔断，本轮不再向该域名发送下载请求；
+- 每本期刊有独立下载尝试预算，低收益期刊默认不参与正式采集；
 - 下载过程使用临时 `.part` 文件，核验PDF签名后原子移动；
 - DOI、OpenAlex ID、标题、候选URL和SHA-256多层去重；
 - 不会自动删除或覆盖旧数据；历史文件缺失或大小不符时不计入配额；
