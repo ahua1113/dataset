@@ -37,6 +37,8 @@ class CollectorV63StructureAndPolicyTests(unittest.TestCase):
         self.policies = load_journal_policies(POLICY)
 
     def test_v63_keeps_42_traceable_journals_but_skips_three_low_yield(self):
+        raw = json.loads(JOURNALS.read_text(encoding="utf-8"))
+        self.assertIsInstance(raw, list)
         self.assertEqual(42, len(self.journals))
         selected, skipped = apply_journal_policies(self.journals, self.policies)
         self.assertEqual(39, len(selected))

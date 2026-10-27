@@ -21,10 +21,9 @@ env/
 .env
 
 # =========================
-# Raw datasets
+# Generated datasets and runtime reports
 # =========================
-chemistry_dataset/*/raw/
-chemistry_dataset/raw/
+chemistry_dataset/
 
 # Large source files
 *.pdf

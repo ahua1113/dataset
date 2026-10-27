@@ -1,8 +1,0 @@
-﻿source_type,metadata_provider,license_verification,count
-arxiv,openalex,license_missing_manual_review,6
-arxiv,openalex,verified_open_license,7
-chemrxiv,openalex,verified_open_license,6
-institutional_repository,openalex,license_missing_manual_review,2
-institutional_repository,openalex,verified_open_license,10
-publisher,openalex,license_missing_manual_review,23
-publisher,openalex,verified_open_license,188

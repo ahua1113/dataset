@@ -1,6 +1,5 @@
 {
   "version": "V6.3",
-  "source_report": "chemistry_dataset/v6_3_feasibility/journal_feasibility_v6_3.json",
   "defaults": {
     "enabled": true,
     "priority": 50,

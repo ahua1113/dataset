@@ -16,7 +16,7 @@ V6.3 只采集无需登录即可合法访问的 OA 资源，不包含出版商�
 
 ## 期刊来源池
 
-`config/journals_v6_3.json` 继承 V6.2 已通过筛选的34本期刊，并增加8本高OA候选刊：
+`config/journals_v6_3.json` 是独立的42刊白名单：34本已验证期刊，加上8本高OA候选刊：
 
 1. JACS Au
 2. ACS Omega
@@ -40,7 +40,7 @@ V6.3 只采集无需登录即可合法访问的 OA 资源，不包含出版商�
 
 ## 项目结构
 
-`collector.py` 只保留兼容入口，主要实现已拆分到 `chemistry_collector/`：
+`collector.py` 是稳定的命令行入口，主要实现位于 `chemistry_collector/`：
 
 ```text
 chemistry_collector/
@@ -57,7 +57,7 @@ chemistry_collector/
 └── resources.py     # 视频、讲义、方法和教材
 ```
 
-`v6_3_core.py` 作为旧导入路径的兼容层保留。
+运行产生的 PDF、manifest、错误日志和统计报告统一写入 `chemistry_dataset/`，该目录已整体加入 `.gitignore`。源代码仓库不再保存可重新生成的运行结果；需要长期保存的原始数据应进入独立数据仓库。
 
 ## 多来源OA兜底
 
