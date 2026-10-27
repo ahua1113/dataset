@@ -1,0 +1,14 @@
+﻿discipline_id,discipline,ACS Catalysis,ACS Central Science,ACS Energy Letters,ACS Materials Au,ACS Nano,ACS Omega,Advanced Energy Materials,Advanced Materials,Beilstein Journal of Nanotechnology,Beilstein Journal of Organic Chemistry,Chem,Chemical Engineering Journal,Chemical Science,Chemical Society Reviews,Chemistry of Materials,ChemistryOpen,Communications Chemistry,Energy & Environmental Science,JACS Au,Joule,Journal of Cheminformatics,Journal of Materials Chemistry A,Journal of the American Chemical Society,Materials Horizons,Materials Today,Matter,Nano Letters,National Science Review,Nature Catalysis,Nature Chemical Biology,Nature Chemical Engineering,Nature Chemistry,Nature Communications,Nature Energy,Nature Materials,Nature Nanotechnology,Nature Reviews Chemistry,Nature Reviews Materials,Nature Sustainability,Nature Synthesis,Proceedings of the National Academy of Sciences of the United States of America,RSC Advances,total
+organic_synthesis,有机与合成化学,1,1,0,0,0,0,0,0,0,7,0,0,0,0,0,0,2,0,0,0,0,0,1,0,0,0,0,0,0,0,0,2,0,0,0,0,1,0,0,5,0,0,20
+inorganic_coordination,无机与配位化学,0,0,1,0,1,0,0,0,0,1,0,0,3,0,0,1,0,0,0,0,0,2,1,1,1,0,0,0,0,0,0,3,0,0,1,0,0,0,0,4,0,0,20
+physical_chemistry,物理化学,0,1,0,0,0,1,1,0,1,0,0,0,0,0,0,2,2,0,1,0,0,0,0,0,0,0,4,1,0,0,0,2,0,0,1,0,1,0,0,1,0,1,20
+analytical_chemistry,分析化学,0,2,0,0,0,5,0,0,1,0,0,1,1,0,0,0,3,0,0,0,2,0,0,0,0,0,0,0,0,1,0,0,0,0,0,0,1,1,0,0,0,2,20
+theoretical_computational,理论与计算化学,0,1,0,0,0,1,0,0,0,1,1,0,3,0,0,0,1,0,1,0,3,2,2,0,0,0,0,2,0,0,0,0,1,0,0,0,0,0,0,1,0,0,20
+polymer_chemistry,高分子化学,1,0,0,1,0,1,0,1,0,0,0,1,0,0,0,0,1,0,0,0,0,1,1,3,0,0,0,0,0,0,0,3,0,0,1,0,0,0,0,0,0,5,20
+materials_nanochemistry,材料与纳米化学,0,0,1,0,1,0,1,2,2,0,0,0,1,0,0,0,0,0,0,0,0,0,0,2,1,1,1,0,0,0,1,0,0,0,3,2,0,0,0,0,1,0,20
+catalysis_surface,催化与表面化学,0,1,1,0,0,0,0,1,1,1,1,0,1,1,0,0,1,0,2,0,0,0,3,0,0,0,0,0,4,0,0,1,0,0,0,0,0,0,1,0,0,0,20
+electrochemistry_energy,电化学与能源化学,0,1,1,0,1,0,3,0,0,0,0,0,0,0,2,1,0,4,0,1,0,0,0,0,0,0,0,1,0,0,2,0,0,3,0,0,0,0,0,0,0,0,20
+biological_medicinal,生物与药物化学,1,1,0,1,1,0,0,0,0,0,0,0,2,1,0,0,3,0,1,0,0,0,0,0,0,0,0,0,0,6,1,0,0,0,0,0,1,1,0,0,0,0,20
+environmental_geochemistry,环境与地球化学,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,2,1,0,0,1,0,0,0,0,1,0,0,1,0,0,0,0,0,4,0,0,0,0,8,0,0,1,20
+chemical_engineering_industrial,化学工程与工业化学,0,0,0,1,0,0,0,1,0,1,0,2,0,0,0,0,2,0,0,0,0,1,0,0,0,0,0,0,0,0,8,1,0,0,0,0,0,1,0,0,1,1,20
+nuclear_radiochemistry,核化学与放射化学,0,0,0,0,0,1,0,0,0,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,2

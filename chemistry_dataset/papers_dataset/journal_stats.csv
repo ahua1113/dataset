@@ -1,35 +1,9 @@
 ﻿journal,issn,publisher,count,target,target_met,percentage
-Nature Chemistry,1755-4349,Nature Portfolio,61,10,True,13.59
-Communications Chemistry,2399-3669,Nature Portfolio,60,10,True,13.36
-Nature Catalysis,2520-1158,Nature Portfolio,55,10,True,12.25
-Nature Synthesis,2731-0582,Nature Portfolio,58,10,True,12.92
-Nature Chemical Biology,1552-4469,Nature Portfolio,58,10,True,12.92
-ACS Central Science,2374-7951,American Chemical Society,1,10,False,0.22
-Materials Horizons,2051-6355,Royal Society of Chemistry,2,10,False,0.45
-Chem,2451-9294,Cell Press / Elsevier,7,10,False,1.56
-Chemical Science,2041-6539,Royal Society of Chemistry,3,10,False,0.67
-Journal of the American Chemical Society,1520-5126,American Chemical Society,2,10,False,0.45
-Nature Energy,2058-7546,Nature Portfolio,20,10,True,4.45
-Nature Materials,1476-4660,Nature Portfolio,20,10,True,4.45
-Nature Nanotechnology,1748-3395,Nature Portfolio,20,10,True,4.45
-Joule,2542-4351,Cell Press / Elsevier,3,10,False,0.67
-Energy & Environmental Science,1754-5706,Royal Society of Chemistry,3,10,False,0.67
-ACS Catalysis,2155-5435,American Chemical Society,2,10,False,0.45
-Nature Chemical Engineering,2948-1198,Nature Portfolio,20,10,True,4.45
-Advanced Energy Materials,1614-6840,Wiley,1,10,False,0.22
-ACS Energy Letters,2380-8195,American Chemical Society,2,10,False,0.45
-ACS Nano,1936-0851,American Chemical Society,1,10,False,0.22
-Nature Sustainability,2398-9629,Nature Portfolio,10,10,True,2.23
-Advanced Materials,1521-4095,Wiley,0,10,False,0.0
-Nature Communications,2041-1723,Nature Portfolio,10,10,True,2.23
-Proceedings of the National Academy of Sciences of the United States of America,1091-6490,National Academy of Sciences,0,10,False,0.0
-National Science Review,2053-714X,Oxford University Press,2,10,False,0.45
-Materials Today,1369-7021,Elsevier,0,10,False,0.0
-Nano Letters,1530-6992,American Chemical Society,0,10,False,0.0
-Chemistry of Materials,1520-5002,American Chemical Society,1,10,False,0.22
-Journal of Materials Chemistry A,2050-7496,Royal Society of Chemistry,2,10,False,0.45
-Chemical Engineering Journal,1385-8947,Elsevier,1,10,False,0.22
-Matter,2590-2385,Cell Press / Elsevier,3,10,False,0.67
-Chemical Society Reviews,1460-4744,Royal Society of Chemistry,1,10,False,0.22
-Nature Reviews Chemistry,2397-3358,Nature Portfolio,10,10,True,2.23
-Nature Reviews Materials,2058-8437,Nature Portfolio,10,10,True,2.23
+JACS Au,2691-3704,American Chemical Society,0,10,False,0.0
+ACS Omega,2470-1343,American Chemical Society,0,10,False,0.0
+ACS Materials Au,2694-2461,American Chemical Society,0,10,False,0.0
+RSC Advances,2046-2069,Royal Society of Chemistry,0,10,False,0.0
+ChemistryOpen,2191-1363,Chemistry Europe / Wiley,0,10,False,0.0
+Beilstein Journal of Organic Chemistry,1860-5397,Beilstein-Institut,0,10,False,0.0
+Beilstein Journal of Nanotechnology,2190-4286,Beilstein-Institut,0,10,False,0.0
+Journal of Cheminformatics,1758-2946,Springer Nature / BMC,0,10,False,0.0

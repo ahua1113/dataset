@@ -1,14 +1,15 @@
 #!/usr/bin/env python3
-"""Chemistry Source Collector V6.2 OA-only journal expansion stage.
+"""Chemistry Source Collector V6.3 OA-only discipline quota stage.
 
-Papers: thirty-four feasibility-tested chemistry journals, OpenAlex OA PDF metadata,
-        traceable journal metadata, global metadata and SHA-256 deduplication.
-No preprint-source discovery and no publisher-login/paywall bypassing logic.
-The next stage will replace per-journal quotas with discipline-level quotas.
+Papers: validated and candidate chemistry journals, discipline-level quotas,
+        OpenAlex + Unpaywall OA locations, traceable fallback metadata,
+        global metadata and SHA-256 deduplication.
+No publisher-login/paywall bypassing logic.
 MIT-OCW videos/teaching and optional methods/textbooks remain usable.
 
 Quick start:
-    python collector.py --categories papers --per-journal-target 1 --dry-run
+    python collector.py --categories papers --dry-run
+    python collector.py --categories papers --download
     python collector.py --categories papers --stats-only
 """
 from __future__ import annotations
@@ -30,29 +31,41 @@ from urllib.robotparser import RobotFileParser
 import requests
 from bs4 import BeautifulSoup
 
+from v6_3_core import (
+    Discipline,
+    all_targets_met as discipline_targets_met,
+    classify_work,
+    is_review_work,
+    load_disciplines,
+    merge_locations,
+    openalex_locations,
+    quota_decision,
+    quota_snapshot,
+    unpaywall_locations,
+    write_reports as write_v6_3_reports,
+)
+
 ROOT = Path(__file__).resolve().parent
-COLLECTOR_VERSION = "6.2"
-WHITELIST_SIZE = 34
+COLLECTOR_VERSION = "6.3"
+WHITELIST_SIZE = 42
 CONFIG_WHITELIST_SIZES = {
     "journals_v6.json": 10,
     "journals_v6_1.json": 20,
     "journals_v6_2.json": 34,
+    "journals_v6_3.json": 42,
 }
 OPENALEX_SOURCES = "https://api.openalex.org/sources"
 OPENALEX_WORKS = "https://api.openalex.org/works"
+UNPAYWALL_API = "https://api.unpaywall.org/v2"
 EPA_INDEX = "https://www.epa.gov/hw-sw846/sw-846-compendium"
 
-# The only sources for PAPER discovery are ISSN-verified journals loaded from
-# config/journals_v6_2.json. There is deliberately no preprint crawler.
+# Paper identity always comes from an ISSN-verified journal. Public copies may
+# come from the publisher, PMC/Europe PMC, arXiv, ChemRxiv or a repository.
 CATEGORY_CHOICES = {"papers", "videos", "teaching", "methods", "textbooks"}
 EXCLUDED_ARTICLE_TITLES = re.compile(
     r"^\s*(?:publisher(?:'s|’s)?\s+correction|author\s+correction|"
     r"correction\s+(?:to|for)\b|erratum\b|retraction\b|"
     r"expression\s+of\s+concern\b|editorial\b|book\s+review\b)", re.I,
-)
-BLOCKED_PDF_HOSTS = (
-    "arxiv.org", "chemrxiv.org", "biorxiv.org", "medrxiv.org",
-    "ssrn.com", "researchsquare.com",
 )
 VIDEO_NON_CHEMICAL_TOPIC = re.compile(
     r"\b(?:writing\s+up\s+the\s+lab\s+report|"
@@ -132,12 +145,26 @@ class Journal:
     group: str
     origin: str
     publisher_hosts: tuple[str, ...]
+    status: str = "validated"
+    feasibility_target: int = 0
 
 
 def load_journals(path: Path) -> list[Journal]:
     if not path.is_file():
         raise FileNotFoundError(f"Journal whitelist missing: {path}")
     data = json.loads(path.read_text(encoding="utf-8"))
+    if isinstance(data, dict):
+        base_name = str(data.get("extends") or "").strip()
+        additions = data.get("journals")
+        if not base_name or Path(base_name).name != base_name:
+            raise ValueError("Extended journal config requires a safe local 'extends' filename")
+        if not isinstance(additions, list):
+            raise ValueError("Extended journal config requires a 'journals' array")
+        base_path = path.parent / base_name
+        base_data = json.loads(base_path.read_text(encoding="utf-8"))
+        if not isinstance(base_data, list):
+            raise ValueError("Base journal whitelist must be a JSON array")
+        data = base_data + additions
     expected_size = CONFIG_WHITELIST_SIZES.get(path.name)
     if not isinstance(data, list) or not data:
         raise ValueError("Journal whitelist must be a non-empty JSON array")
@@ -158,11 +185,17 @@ def load_journals(path: Path) -> list[Journal]:
             group=str(row["group"]).strip(),
             origin=str(row["origin"]).strip(),
             publisher_hosts=tuple(str(x).lower() for x in row["publisher_hosts"]),
+            status=str(row.get("status") or "validated").strip().lower(),
+            feasibility_target=int(row.get("feasibility_target") or 0),
         )
         if not re.fullmatch(r"\d{4}-[\dX]{4}", journal.issn, re.I):
             raise ValueError(f"Invalid ISSN: {journal.name}: {journal.issn}")
         if not journal.name or not is_https(journal.website) or not journal.publisher_hosts:
             raise ValueError(f"Invalid whitelist entry: {journal.name}")
+        if journal.status not in {"validated", "candidate"}:
+            raise ValueError(f"Invalid journal status: {journal.name}: {journal.status}")
+        if journal.feasibility_target < 0:
+            raise ValueError(f"Invalid feasibility target: {journal.name}")
         if journal.name.casefold() in names or journal.issn in issns:
             raise ValueError(f"Duplicate whitelist journal/ISSN: {journal.name}")
         names.add(journal.name.casefold())
@@ -186,6 +219,7 @@ class Client:
             agent += f" (contact: {contact.strip()})"
         self.session.headers.update({"User-Agent": agent, "Accept": "application/json, application/pdf, */*"})
         self.respect_robots = respect_robots
+        self.contact = contact.strip()
         self.openalex_api_key = openalex_api_key.strip()
         self.robot_parsers: dict[str, RobotFileParser] = {}
         self.last_request: dict[str, float] = {}
@@ -281,57 +315,41 @@ def resolve_openalex_source(client: Client, journal: Journal) -> str:
     return source_id
 
 
-def candidate_pdf_locations(work: dict, journal: Journal, source_id: str) -> list[dict]:
+def candidate_pdf_locations(work: dict, journal: Journal, source_id: str,
+                            allow_preprints: bool = False) -> list[dict]:
     """Publisher OA PDF first; repository accepted/published copy as fallback.
 
     A preprint-hosted PDF is *not* a journal-published PDF. Exclude known
     preprint servers even if OpenAlex links that version to the journal work.
     """
-    locations = [work.get("primary_location"), work.get("best_oa_location")]
-    locations += work.get("locations") or []
-    selected = []
-    seen = set()
-    for location in locations:
-        if not isinstance(location, dict) or not location.get("is_oa"):
-            continue
-        url = str(location.get("pdf_url") or "").strip()
-        if not is_https(url) or url in seen:
-            continue
-        host = hostname(url)
-        landing = str(location.get("landing_page_url") or "")
-        landing_host = hostname(landing)
-        if any(domain_matches(host, h) or domain_matches(landing_host, h)
-               for h in BLOCKED_PDF_HOSTS):
-            continue
-        version = location.get("version") or "unknown"
-        publisher_host = any(domain_matches(host, h) for h in journal.publisher_hosts)
-        source = location.get("source") or {}
-        publisher_source = normalized_id(str(source.get("id") or "")) == source_id.lower()
-        # A repository copy must be published or accepted, not an unverified
-        # or submitted preprint, to keep the corpus journal-oriented.
-        if not (publisher_host or publisher_source) and version not in {"publishedVersion", "acceptedVersion"}:
-            continue
-        seen.add(url)
-        selected.append({
-            "url": url,
-            "version": version,
-            "landing_page": landing,
-            "license": str(location.get("license") or ""),
-            "oa_host": host,
-            "publisher_pdf": bool(publisher_host or publisher_source),
-            "repository_fallback": not (publisher_host or publisher_source),
-        })
-    selected.sort(key=lambda loc: (
-        not loc["publisher_pdf"],
-        loc["version"] not in {"publishedVersion"},
-        loc["version"] not in {"acceptedVersion"},
-    ))
-    return selected
+    return openalex_locations(
+        work, journal.publisher_hosts, source_id, allow_preprints=allow_preprints
+    )
 
 
-def article_candidate(work: dict, journal: Journal, source_id: str) -> tuple[dict | None, str]:
-    if work.get("type") != "article":
-        return None, "not an article"
+def unpaywall_pdf_locations(client: Client, doi: str, journal: Journal,
+                            allow_preprints: bool = True) -> list[dict]:
+    """Resolve extra legal OA copies. Unpaywall requires a contact email."""
+    if not client.contact or "@" not in client.contact:
+        return []
+    url = f"{UNPAYWALL_API}/{doi}?" + urlencode({"email": client.contact})
+    try:
+        data = client.json(url)
+    except SourceError as exc:
+        print(f"[WARN] Unpaywall lookup failed for {doi}: {exc}", flush=True)
+        return []
+    if not data.get("is_oa"):
+        return []
+    return unpaywall_locations(
+        data, journal.publisher_hosts, allow_preprints=allow_preprints
+    )
+
+
+def article_candidate(work: dict, journal: Journal, source_id: str,
+                      disciplines: list[Discipline] | None = None,
+                      allow_preprints: bool = False) -> tuple[dict | None, str]:
+    if work.get("type") not in {"article", "review"}:
+        return None, "not an article or review"
     if work.get("is_retracted") or work.get("is_paratext"):
         return None, "retracted or paratext"
     title = " ".join(str(work.get("title") or "").split())
@@ -346,44 +364,60 @@ def article_candidate(work: dict, journal: Journal, source_id: str) -> tuple[dic
     doi = normalize_doi(str(work.get("doi") or ""))
     if not doi:
         return None, "missing DOI; cannot verify published article identity"
-    locations = candidate_pdf_locations(work, journal, source_id)
-    if not locations:
+    locations = candidate_pdf_locations(
+        work, journal, source_id, allow_preprints=allow_preprints
+    )
+    if not locations and disciplines is None:
         return None, "OA work has no acceptable HTTPS PDF location"
     landing = str(primary.get("landing_page_url") or "").strip()
     article_page = landing if is_https(landing) else "https://doi.org/" + doi
     oa = work.get("open_access") or {}
+    review = is_review_work(work)
+    classification = (
+        classify_work(work, journal.group, disciplines)
+        if disciplines else {
+            "primary_discipline": "chemistry",
+            "primary_discipline_name": "Chemistry",
+            "secondary_disciplines": [],
+            "discipline_score": 1,
+            "discipline_evidence": [f"ISSN-verified journal whitelist: {journal.name}"],
+            "discipline_classifier": "legacy_journal_whitelist",
+        }
+    )
     return {
-        "category": "papers", "resource_kind": "research_article",
+        "category": "papers", "resource_kind": "review_article" if review else "research_article",
         "title": title, "journal": journal.name, "journal_issn": journal.issn,
         "journal_group": journal.group, "journal_whitelist_origin": journal.origin,
-        "publisher": journal.publisher, "source_group": "v6_2_oa_journals",
+        "publisher": journal.publisher, "source_group": "v6_3_oa_journals",
+        "journal_status": journal.status,
         "source_page": article_page, "doi": doi,
         "openalex_id": str(work.get("id") or ""),
         "openalex_source_id": source_id,
         "published_at": str(work.get("publication_date") or ""),
         "oa_verified": True, "oa_status": str(oa.get("oa_status") or ""),
-        "discipline": "Chemistry",
-        "discipline_evidence": f"ISSN-verified journal whitelist: {journal.name}",
-        "discipline_verification_level": "source_issn+primary_journal_id",
+        **classification,
+        "is_review": review,
+        "discipline_verification_level": "source_issn+primary_journal_id+metadata_classifier",
         "article_filter": "type=article, OA=true, non-retracted, DOI present",
         "pdf_locations": locations,
     }, "accepted"
 
 
 def journal_article_iterator(client: Client, journal: Journal, per_page: int, pages: int,
-                             error_path: Path) -> Iterator[dict]:
+                             error_path: Path, disciplines: list[Discipline] | None = None,
+                             allow_preprints: bool = False) -> Iterator[dict]:
     source_id = resolve_openalex_source(client, journal)
     print(f"[OpenAlex] {journal.name}: ISSN={journal.issn} -> {source_id}", flush=True)
     for page in range(1, pages + 1):
         params = {
             "filter": (f"primary_location.source.id:{source_id},"
-                       "open_access.is_oa:true,type:article,is_retracted:false"),
+                       "open_access.is_oa:true,type:article|review,is_retracted:false"),
             "sort": "publication_date:desc",
             "page": page,
             "per_page": per_page,
             "select": ("id,doi,title,type,publication_date,open_access,"
                        "primary_location,best_oa_location,locations,"
-                       "is_retracted,is_paratext"),
+                       "is_retracted,is_paratext,abstract_inverted_index,topics,keywords"),
         }
         url = OPENALEX_WORKS + "?" + urlencode(params)
         data = client.json(url)
@@ -393,7 +427,10 @@ def journal_article_iterator(client: Client, journal: Journal, per_page: int, pa
         qualified = 0
         for work in results:
             try:
-                candidate, reason = article_candidate(work, journal, source_id)
+                candidate, reason = article_candidate(
+                    work, journal, source_id, disciplines,
+                    allow_preprints=allow_preprints,
+                )
                 if candidate:
                     qualified += 1
                     yield candidate
@@ -552,6 +589,8 @@ def append_csv(path: Path, item: dict, fieldnames: list[str]) -> None:
 PAPER_AUDIT_COLUMNS = [
     "at", "journal", "journal_issn", "title", "doi", "openalex_id",
     "source_page", "download_url", "oa_status", "oa_version", "oa_pdf_host",
+    "primary_discipline", "primary_discipline_name", "oa_pdf_source",
+    "oa_metadata_provider", "license_note", "license_verification",
     "filter_status", "filter_reason",
 ]
 
@@ -587,7 +626,7 @@ def save_journal_stats(root: Path, journals: list[Journal], records: list[dict],
         "percentage": round(100 * counts[journal.name] / total, 2) if total else 0.0,
     } for journal in journals]
     report = {
-        "version": "V6.2",
+        "version": f"V{COLLECTOR_VERSION}",
         "updated_at": updated_at,
         "counting_rule": "unique SHA-256, status=downloaded, manifest record and local file exist with matching recorded size",
         "per_journal_target": per_journal_target,
@@ -646,7 +685,7 @@ def save_feasibility_report(root: Path, states: list[dict], counts: dict[str, in
             "discovery_error": state.get("error", ""),
         })
     report = {
-        "version": "V6.2",
+        "version": f"V{COLLECTOR_VERSION}",
         "updated_at": now_utc(),
         "mode": "metadata_preview" if dry_run else "pdf_download",
         "target_definition": (
@@ -660,12 +699,13 @@ def save_feasibility_report(root: Path, states: list[dict], counts: dict[str, in
         "journals": rows,
     }
     root.mkdir(parents=True, exist_ok=True)
-    json_path = root / "journal_feasibility_v6_2.json"
+    suffix = COLLECTOR_VERSION.replace(".", "_")
+    json_path = root / f"journal_feasibility_v{suffix}.json"
     json_tmp = json_path.with_suffix(json_path.suffix + ".tmp")
     json_tmp.write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n",
                         encoding="utf-8")
     json_tmp.replace(json_path)
-    csv_path = root / "journal_feasibility_v6_2.csv"
+    csv_path = root / f"journal_feasibility_v{suffix}.csv"
     csv_tmp = csv_path.with_suffix(csv_path.suffix + ".tmp")
     with csv_tmp.open("w", encoding="utf-8-sig", newline="") as f:
         writer = csv.DictWriter(f, fieldnames=list(rows[0]))
@@ -681,8 +721,23 @@ def print_journal_stats(counts: dict[str, int]) -> None:
     print(f"  TOTAL: {sum(counts.values())}", flush=True)
 
 
+def select_journals(journals: list[Journal], stage: str) -> list[Journal]:
+    if stage == "all":
+        return journals
+    selected = [journal for journal in journals if journal.status == stage]
+    if not selected:
+        raise ValueError(f"No journals selected for stage={stage!r}")
+    return selected
+
+
 def collect_papers(client: Client, args, root: Path) -> None:
-    journals = load_journals(args.journals_file)
+    journals = select_journals(
+        load_journals(args.journals_file), getattr(args, "journal_stage", "all")
+    )
+    disciplines = (
+        load_disciplines(args.disciplines_file)
+        if getattr(args, "disciplines_file", None) else None
+    )
     allowed = {journal.name for journal in journals}
     all_history = load_existing_records(root, category="papers")
     old = [row for row in all_history if row.get("journal") in allowed]
@@ -695,12 +750,12 @@ def collect_papers(client: Client, args, root: Path) -> None:
     counts = save_journal_stats(root, journals, old, per_journal_target)
     total = sum(counts.values())
     print(
-        f"[V6.2] {len(journals)} whitelist journals; old_valid={total}; "
+        f"[V{COLLECTOR_VERSION}] {len(journals)} whitelist journals; old_valid={total}; "
         f"per_journal_target={per_journal_target}",
         flush=True,
     )
     if all(count >= per_journal_target for count in counts.values()) and not args.dry_run:
-        print("[V6.2] Every journal target already reached; nothing to download.", flush=True)
+        print(f"[V{COLLECTOR_VERSION}] Every journal target already reached; nothing to download.", flush=True)
         states = [{"journal": journal, "tried": 0, "previewed": 0,
                    "download_attempts": 0, "success": 0, "error": ""}
                   for journal in journals]
@@ -709,11 +764,22 @@ def collect_papers(client: Client, args, root: Path) -> None:
         return
 
     errors = root / "errors.jsonl"
-    candidates_csv = root / "papers_v6_2_candidates.csv"
-    excluded_csv = root / "papers_v6_2_filtered_out.csv"
+    version_suffix = COLLECTOR_VERSION.replace(".", "_")
+    candidates_csv = root / f"papers_v{version_suffix}_candidates.csv"
+    excluded_csv = root / f"papers_v{version_suffix}_filtered_out.csv"
+    def legacy_iterator(journal: Journal) -> Iterator[dict]:
+        if disciplines is None and not getattr(args, "allow_preprint_fallback", False):
+            return journal_article_iterator(
+                client, journal, args.per_page, args.max_pages_per_journal, errors
+            )
+        return journal_article_iterator(
+            client, journal, args.per_page, args.max_pages_per_journal, errors,
+            disciplines=disciplines,
+            allow_preprints=getattr(args, "allow_preprint_fallback", False),
+        )
+
     states = [
-        {"journal": j, "iterator": iter(journal_article_iterator(
-            client, j, args.per_page, args.max_pages_per_journal, errors)),
+        {"journal": j, "iterator": iter(legacy_iterator(j)),
          "active": args.dry_run or counts[j.name] < per_journal_target,
          "success": 0, "tried": 0, "previewed": 0,
          "download_attempts": 0, "error": ""}
@@ -760,6 +826,20 @@ def collect_papers(client: Client, args, root: Path) -> None:
             if matching:
                 paper_audit(excluded_csv, item, "duplicate_metadata", sorted(matching)[0])
                 continue
+            if getattr(args, "use_unpaywall", False):
+                item["pdf_locations"] = merge_locations(
+                    item["pdf_locations"],
+                    unpaywall_pdf_locations(
+                        client, item["doi"], journal,
+                        allow_preprints=getattr(args, "allow_preprint_fallback", False),
+                    ),
+                )
+            if not item.get("pdf_locations"):
+                paper_audit(
+                    excluded_csv, item, "no_oa_pdf_after_fallback",
+                    "OpenAlex and Unpaywall returned no acceptable HTTPS PDF",
+                )
+                continue
             if args.dry_run or not args.download:
                 previewed += 1
                 state["previewed"] += 1
@@ -779,9 +859,12 @@ def collect_papers(client: Client, args, root: Path) -> None:
                                "oa_version": location["version"],
                                "oa_pdf_host": location["oa_host"],
                                "oa_pdf_source_page": location["landing_page"],
-                               "oa_pdf_source": "publisher" if location["publisher_pdf"] else "OA_repository",
-                               "oa_verification_level": "openalex_work_oa+pdf_location+file_signature",
+                               "oa_pdf_source": location.get("source_type", "publisher" if location["publisher_pdf"] else "OA_repository"),
+                               "oa_metadata_provider": location.get("metadata_provider", "openalex"),
+                               "source_fallback_rank": location.get("fallback_rank", 1),
+                               "oa_verification_level": "openalex_journal_identity+oa_location+file_signature",
                                "license_note": location["license"] or "CHECK_ARTICLE_SPECIFIC_LICENSE",
+                               "license_verification": location.get("license_status", "manual_review_required"),
                                "download_url": url}
                 try:
                     state_str, record = download_file(
@@ -824,7 +907,7 @@ def collect_papers(client: Client, args, root: Path) -> None:
                             args.dry_run or not args.download)
     print_journal_stats(counts)
     print(
-        f"[V6.2] valid_pdf_total={sum(counts.values())} "
+        f"[V{COLLECTOR_VERSION}] valid_pdf_total={sum(counts.values())} "
         f"new_downloads={successes} previewed={previewed}",
         flush=True,
     )
@@ -848,6 +931,258 @@ def collect_papers(client: Client, args, root: Path) -> None:
         print(
             f"[WARN] Metadata feasibility target not reached for {len(preview_unmet)} journals: "
             + ", ".join(preview_unmet),
+            flush=True,
+        )
+
+
+def collect_papers_v6_3(client: Client, args, root: Path) -> None:
+    """Collect by discipline quota; journals are sources, never quota buckets."""
+    all_journals = load_journals(args.journals_file)
+    journals = select_journals(all_journals, args.journal_stage)
+    disciplines = load_disciplines(args.disciplines_file)
+    discipline_map = {discipline.id: discipline for discipline in disciplines}
+    allowed = {journal.name for journal in journals}
+    history = load_existing_records(root, category="papers")
+    quota_records = [
+        record for record in history
+        if record.get("journal") in allowed
+        and record.get("primary_discipline") in discipline_map
+    ]
+    ignored_legacy = sum(
+        record.get("journal") in allowed
+        and record.get("primary_discipline") not in discipline_map
+        for record in history
+    )
+    if ignored_legacy:
+        print(
+            f"[WARN] {ignored_legacy} legacy papers have no V6.3 primary discipline "
+            "and are not counted toward quotas.",
+            flush=True,
+        )
+
+    seen_keys: set[str] = set()
+    seen_sha: set[str] = set()
+    for record in history:
+        seen_keys.update(identity_keys(record))
+        seen_sha.add(str(record.get("sha256") or "").lower())
+
+    snapshot = quota_snapshot(quota_records, disciplines)
+    mode = "metadata_preview" if args.dry_run or not args.download else "pdf_download"
+    write_v6_3_reports(
+        root, quota_records, disciplines, args.min_journals_per_discipline,
+        args.max_journal_share, args.max_review_share, mode,
+    )
+    print(
+        f"[V6.3] journals={len(journals)} stage={args.journal_stage}; "
+        f"disciplines={len(disciplines)}; counted={sum(snapshot['counts'].values())}",
+        flush=True,
+    )
+    if discipline_targets_met(
+        snapshot, disciplines, args.min_journals_per_discipline,
+        args.max_journal_share, args.max_review_share,
+    ):
+        print("[V6.3] Every discipline quota already meets all constraints.", flush=True)
+        return
+
+    errors = root / "errors.jsonl"
+    candidates_csv = root / "papers_v6_3_candidates.csv"
+    excluded_csv = root / "papers_v6_3_filtered_out.csv"
+    states = [{
+        "journal": journal,
+        "iterator": iter(journal_article_iterator(
+            client, journal, args.per_page, args.max_pages_per_journal, errors,
+            disciplines=disciplines,
+            allow_preprints=args.allow_preprint_fallback,
+        )),
+        "active": True,
+        "tried": 0,
+        "accepted": 0,
+        "download_attempts": 0,
+        "downloaded": 0,
+        "error": "",
+    } for journal in journals]
+    tried = 0
+    previewed = 0
+    successes = 0
+
+    while tried < args.max_attempts and not discipline_targets_met(
+        snapshot, disciplines, args.min_journals_per_discipline,
+        args.max_journal_share, args.max_review_share,
+    ):
+        made_progress = False
+        for state in states:
+            if not state["active"]:
+                continue
+            journal = state["journal"]
+            try:
+                item = next(state["iterator"])
+            except StopIteration:
+                state["active"] = False
+                continue
+            except (SourceError, requests.RequestException, ValueError, KeyError) as exc:
+                state["active"] = False
+                state["error"] = str(exc)
+                log_error(errors, "papers", str(exc), journal=journal.name, phase="discovery")
+                print(f"[WARN] {journal.name} discovery stopped: {exc}", flush=True)
+                continue
+            made_progress = True
+            tried += 1
+            state["tried"] += 1
+
+            matching = seen_keys.intersection(identity_keys(item))
+            if matching:
+                paper_audit(excluded_csv, item, "duplicate_metadata", sorted(matching)[0])
+                continue
+            eligible, reason = quota_decision(
+                item, snapshot, discipline_map,
+                args.max_journal_share, args.max_review_share,
+                args.min_journals_per_discipline,
+            )
+            if not eligible:
+                paper_audit(excluded_csv, item, "discipline_quota_rejected", reason)
+                continue
+
+            if args.use_unpaywall:
+                item["pdf_locations"] = merge_locations(
+                    item.get("pdf_locations") or [],
+                    unpaywall_pdf_locations(
+                        client, item["doi"], journal,
+                        allow_preprints=args.allow_preprint_fallback,
+                    ),
+                )
+            if not item.get("pdf_locations"):
+                paper_audit(
+                    excluded_csv, item, "no_oa_pdf_after_fallback",
+                    "OpenAlex and Unpaywall returned no acceptable HTTPS PDF",
+                )
+                continue
+
+            state["accepted"] += 1
+            fallback_chain = [{
+                "rank": location.get("fallback_rank"),
+                "metadata_provider": location.get("metadata_provider"),
+                "source_type": location.get("source_type"),
+                "version": location.get("version"),
+                "host": location.get("oa_host"),
+                "license": location.get("license"),
+                "url": location.get("url"),
+            } for location in item["pdf_locations"][:args.max_pdf_mirrors]]
+
+            if args.dry_run or not args.download:
+                preview = {
+                    **{key: value for key, value in item.items() if key != "pdf_locations"},
+                    "status": "eligible_not_downloaded",
+                    "oa_fallback_chain": fallback_chain,
+                    "oa_pdf_source": item["pdf_locations"][0].get("source_type"),
+                    "oa_metadata_provider": item["pdf_locations"][0].get("metadata_provider"),
+                    "license_note": item["pdf_locations"][0].get("license"),
+                    "license_verification": item["pdf_locations"][0].get("license_status"),
+                }
+                quota_records.append(preview)
+                snapshot = quota_snapshot(quota_records, disciplines)
+                seen_keys.update(identity_keys(item))
+                previewed += 1
+                paper_audit(candidates_csv, preview, "eligible_not_downloaded")
+                print(
+                    f"[PREVIEW] {item['primary_discipline_name']} "
+                    f"{snapshot['counts'][item['primary_discipline']]}/"
+                    f"{discipline_map[item['primary_discipline']].target} | "
+                    f"{journal.name} | {item['title'][:70]}",
+                    flush=True,
+                )
+                continue
+
+            downloaded = False
+            last_error = "No OA fallback location succeeded"
+            for location in item["pdf_locations"][:args.max_pdf_mirrors]:
+                url = location["url"]
+                state["download_attempts"] += 1
+                record_item = {
+                    **item,
+                    "oa_version": location["version"],
+                    "oa_pdf_host": location["oa_host"],
+                    "oa_pdf_source_page": location["landing_page"],
+                    "oa_pdf_source": location["source_type"],
+                    "oa_metadata_provider": location["metadata_provider"],
+                    "source_fallback_rank": location["fallback_rank"],
+                    "oa_fallback_chain": fallback_chain,
+                    "oa_verification_level": "issn_journal_identity+oa_resolver+file_signature",
+                    "license_note": location["license"],
+                    "license_verification": location["license_status"],
+                    "download_url": url,
+                }
+                try:
+                    status, record = download_file(
+                        client, record_item, root, url=url, ext=".pdf",
+                        max_file_mb=args.max_file_mb, seen_sha=seen_sha,
+                    )
+                    if status == "sha_duplicate":
+                        paper_audit(
+                            excluded_csv, record_item, "duplicate_sha256",
+                            "Identical PDF bytes already saved",
+                        )
+                        downloaded = True
+                        break
+                    assert record is not None
+                    append_jsonl(root / "manifest.jsonl", record)
+                    seen_keys.update(identity_keys(record))
+                    seen_sha.add(record["sha256"])
+                    quota_records.append(record)
+                    snapshot = quota_snapshot(quota_records, disciplines)
+                    successes += 1
+                    state["downloaded"] += 1
+                    write_v6_3_reports(
+                        root, quota_records, disciplines,
+                        args.min_journals_per_discipline,
+                        args.max_journal_share, args.max_review_share, mode,
+                    )
+                    paper_audit(candidates_csv, record, "downloaded")
+                    print(
+                        f"[papers] {item['primary_discipline_name']} "
+                        f"{snapshot['counts'][item['primary_discipline']]}/"
+                        f"{discipline_map[item['primary_discipline']].target} | "
+                        f"{journal.name} | source={location['source_type']} | "
+                        f"{record['title'][:58]}",
+                        flush=True,
+                    )
+                    downloaded = True
+                    break
+                except (SourceError, requests.RequestException, OSError, ValueError) as exc:
+                    last_error = str(exc)
+                    log_error(
+                        errors, "papers", last_error, journal=journal.name,
+                        doi=item["doi"], download_url=url,
+                        source_type=location.get("source_type"), phase="download",
+                    )
+                    print(
+                        f"[FALLBACK] {journal.name} {location['source_type']}: {last_error}",
+                        flush=True,
+                    )
+            if not downloaded:
+                paper_audit(excluded_csv, item, "download_failed", last_error)
+        if not made_progress:
+            break
+
+    report = write_v6_3_reports(
+        root, quota_records, disciplines, args.min_journals_per_discipline,
+        args.max_journal_share, args.max_review_share, mode,
+    )
+    print(
+        f"[V6.3] tried={tried} previewed={previewed} new_downloads={successes}; "
+        f"disciplines_met={report['disciplines_meeting_target']}/{len(disciplines)}",
+        flush=True,
+    )
+    for row in report["disciplines"]:
+        print(
+            f"  {row['discipline']}: {row['count']}/{row['target']} "
+            f"gap={row['gap']} journals={row['unique_journals']} "
+            f"target_met={row['target_met']}",
+            flush=True,
+        )
+    if not report["all_disciplines_meet_target"]:
+        print(
+            "[WARN] Some discipline quotas remain unmet. See "
+            "discipline_stats_v6_3.json; no count was fabricated.",
             flush=True,
         )
 
@@ -993,13 +1328,32 @@ def main() -> None:
     parser.add_argument("--categories", default="papers", help="papers,videos,teaching,methods,textbooks")
     parser.add_argument("--limit", type=int, default=100,
                         help="cumulative successful files for non-paper categories")
-    parser.add_argument("--per-journal-target", type=int, default=20,
-                        help="minimum eligible candidates/PDFs required from every paper journal")
+    parser.add_argument("--per-journal-target", type=int, default=10,
+                        help="candidate-journal feasibility target; only used with --feasibility-only")
     parser.add_argument("--download", action="store_true", help="download originals (otherwise only preview)")
     parser.add_argument("--dry-run", action="store_true", help="preview eligible papers only")
     parser.add_argument("--out", type=Path, default=ROOT / "chemistry_dataset" / "papers_dataset")
     parser.add_argument("--journals-file", type=Path,
-                        default=ROOT / "config" / "journals_v6_2.json")
+                        default=ROOT / "config" / "journals_v6_3.json")
+    parser.add_argument("--disciplines-file", type=Path,
+                        default=ROOT / "config" / "disciplines_v6_3.json")
+    parser.add_argument("--journal-stage", choices=("validated", "candidate", "all"),
+                        default="validated",
+                        help="validated=34 proven journals; candidate=8 new OA journals; all=both")
+    parser.add_argument("--feasibility-only", action="store_true",
+                        help="use per-journal target instead of discipline quotas")
+    parser.add_argument("--min-journals-per-discipline", type=int, default=3)
+    parser.add_argument("--max-journal-share", type=float, default=0.40)
+    parser.add_argument("--max-review-share", type=float, default=0.30)
+    parser.add_argument(
+        "--allow-preprint-fallback", action=argparse.BooleanOptionalAction,
+        default=True,
+        help="allow DOI-linked arXiv/ChemRxiv copy after journal identity is verified",
+    )
+    parser.add_argument(
+        "--use-unpaywall", action=argparse.BooleanOptionalAction, default=True,
+        help="augment OpenAlex locations via Unpaywall (requires --contact email)",
+    )
     parser.add_argument("--contact", default="", help="optional polite contact email for User-Agent")
     parser.add_argument(
         "--openalex-api-key",
@@ -1014,15 +1368,20 @@ def main() -> None:
     parser.add_argument("--books-csv", type=Path, default=ROOT / "config" / "textbook_seeds.csv")
     parser.add_argument("--audit-only", action="store_true")
     parser.add_argument("--stats-only", action="store_true",
-                        help="rebuild and display paper journal counts without network requests")
+                        help="rebuild V6.3 discipline/source reports without network requests")
     args = parser.parse_args()
     cats = [x.strip() for x in args.categories.split(",") if x.strip()]
     if not cats or not set(cats).issubset(CATEGORY_CHOICES):
         parser.error(f"Unknown categories; allowed: {sorted(CATEGORY_CHOICES)}")
     if any(x <= 0 for x in (args.limit, args.per_journal_target,
                              args.max_file_mb, args.max_pdf_mirrors,
-                             args.max_pages_per_journal, args.per_page, args.max_attempts)):
+                             args.max_pages_per_journal, args.per_page, args.max_attempts,
+                             args.min_journals_per_discipline)):
         parser.error("Numeric limits must all be greater than zero")
+    if not (0 < args.max_journal_share <= 1):
+        parser.error("--max-journal-share must be in (0, 1]")
+    if not (0 <= args.max_review_share <= 1):
+        parser.error("--max-review-share must be in [0, 1]")
     if args.per_page > 100:
         parser.error("OpenAlex --per-page must be <= 100")
     args.out.mkdir(parents=True, exist_ok=True)
@@ -1031,20 +1390,38 @@ def main() -> None:
     if args.stats_only:
         if "papers" not in cats:
             parser.error("--stats-only requires --categories papers")
-        print_journal_stats(refresh_journal_stats(
-            args.out, journals, args.per_journal_target))
+        selected = select_journals(journals, args.journal_stage)
+        disciplines = load_disciplines(args.disciplines_file)
+        records = [
+            row for row in load_existing_records(args.out, category="papers")
+            if row.get("journal") in {journal.name for journal in selected}
+        ]
+        report = write_v6_3_reports(
+            args.out, records, disciplines, args.min_journals_per_discipline,
+            args.max_journal_share, args.max_review_share, "local_audit",
+        )
+        print(
+            f"[V6.3] disciplines_met={report['disciplines_meeting_target']}/"
+            f"{report['discipline_count']} counted={report['total_counted_papers']}"
+        )
         return
     if args.audit_only:
         audit_existing(args.out, cats, journals)
         return
     client = Client(args.contact, openalex_api_key=args.openalex_api_key)
     for category in cats:
-        target_label = (f"per_journal_target={args.per_journal_target}"
-                        if category == "papers" else f"target={args.limit}")
-        print(f"\n=== V6.2 {category} {target_label} ===", flush=True)
+        target_label = (
+            f"per_journal_target={args.per_journal_target}"
+            if category == "papers" and args.feasibility_only
+            else ("discipline_quotas" if category == "papers" else f"target={args.limit}")
+        )
+        print(f"\n=== V6.3 {category} {target_label} ===", flush=True)
         try:
             if category == "papers":
-                collect_papers(client, args, args.out)
+                if args.feasibility_only:
+                    collect_papers(client, args, args.out)
+                else:
+                    collect_papers_v6_3(client, args, args.out)
             else:
                 collect_other(client, args, args.out, category)
         except (SourceError, RuntimeError, OSError, ValueError) as exc:

@@ -1,0 +1,14 @@
+{
+  "version": "V6.3",
+  "extends": "journals_v6_2.json",
+  "journals": [
+    {"name":"JACS Au","issn":"2691-3704","publisher":"American Chemical Society","website":"https://pubs.acs.org/journal/jaaucr","group":"综合化学","origin":"V6.3高OA扩充候选","publisher_hosts":["pubs.acs.org","acs.figshare.com"],"status":"candidate","feasibility_target":10},
+    {"name":"ACS Omega","issn":"2470-1343","publisher":"American Chemical Society","website":"https://pubs.acs.org/journal/acsodf","group":"综合化学","origin":"V6.3高OA扩充候选","publisher_hosts":["pubs.acs.org","acs.figshare.com"],"status":"candidate","feasibility_target":10},
+    {"name":"ACS Materials Au","issn":"2694-2461","publisher":"American Chemical Society","website":"https://pubs.acs.org/journal/amacgu","group":"材料化学","origin":"V6.3高OA扩充候选","publisher_hosts":["pubs.acs.org","acs.figshare.com"],"status":"candidate","feasibility_target":10},
+    {"name":"RSC Advances","issn":"2046-2069","publisher":"Royal Society of Chemistry","website":"https://www.rsc.org/publishing/journals/rsc-advances","group":"综合化学","origin":"V6.3高OA扩充候选","publisher_hosts":["pubs.rsc.org","rsc.org"],"status":"candidate","feasibility_target":10},
+    {"name":"ChemistryOpen","issn":"2191-1363","publisher":"Chemistry Europe / Wiley","website":"https://chemistry-europe.onlinelibrary.wiley.com/journal/21911363","group":"综合化学","origin":"V6.3高OA扩充候选","publisher_hosts":["onlinelibrary.wiley.com","chemistry-europe.onlinelibrary.wiley.com","wiley.com"],"status":"candidate","feasibility_target":10},
+    {"name":"Beilstein Journal of Organic Chemistry","issn":"1860-5397","publisher":"Beilstein-Institut","website":"https://www.beilstein-journals.org/bjoc","group":"有机与合成化学","origin":"V6.3高OA扩充候选","publisher_hosts":["beilstein-journals.org"],"status":"candidate","feasibility_target":10},
+    {"name":"Beilstein Journal of Nanotechnology","issn":"2190-4286","publisher":"Beilstein-Institut","website":"https://www.beilstein-journals.org/bjnano","group":"材料与纳米化学","origin":"V6.3高OA扩充候选","publisher_hosts":["beilstein-journals.org"],"status":"candidate","feasibility_target":10},
+    {"name":"Journal of Cheminformatics","issn":"1758-2946","publisher":"Springer Nature / BMC","website":"https://jcheminf.biomedcentral.com/","group":"理论与计算化学","origin":"V6.3高OA扩充候选","publisher_hosts":["jcheminf.biomedcentral.com","biomedcentral.com","springer.com","link.springer.com","media.springernature.com"],"status":"candidate","feasibility_target":10}
+  ]
+}

@@ -1,0 +1,82 @@
+{
+  "version": "V6.3",
+  "updated_at": "2026-10-27T02:47:53.993446+00:00",
+  "counting_rule": "unique SHA-256, status=downloaded, manifest record and local file exist with matching recorded size",
+  "per_journal_target": 10,
+  "journals_meeting_target": 5,
+  "total_papers": 63,
+  "journals": [
+    {
+      "journal": "JACS Au",
+      "issn": "2691-3704",
+      "publisher": "American Chemical Society",
+      "count": 10,
+      "target": 10,
+      "target_met": true,
+      "percentage": 15.87
+    },
+    {
+      "journal": "ACS Omega",
+      "issn": "2470-1343",
+      "publisher": "American Chemical Society",
+      "count": 6,
+      "target": 10,
+      "target_met": false,
+      "percentage": 9.52
+    },
+    {
+      "journal": "ACS Materials Au",
+      "issn": "2694-2461",
+      "publisher": "American Chemical Society",
+      "count": 10,
+      "target": 10,
+      "target_met": true,
+      "percentage": 15.87
+    },
+    {
+      "journal": "RSC Advances",
+      "issn": "2046-2069",
+      "publisher": "Royal Society of Chemistry",
+      "count": 2,
+      "target": 10,
+      "target_met": false,
+      "percentage": 3.17
+    },
+    {
+      "journal": "ChemistryOpen",
+      "issn": "2191-1363",
+      "publisher": "Chemistry Europe / Wiley",
+      "count": 5,
+      "target": 10,
+      "target_met": false,
+      "percentage": 7.94
+    },
+    {
+      "journal": "Beilstein Journal of Organic Chemistry",
+      "issn": "1860-5397",
+      "publisher": "Beilstein-Institut",
+      "count": 10,
+      "target": 10,
+      "target_met": true,
+      "percentage": 15.87
+    },
+    {
+      "journal": "Beilstein Journal of Nanotechnology",
+      "issn": "2190-4286",
+      "publisher": "Beilstein-Institut",
+      "count": 10,
+      "target": 10,
+      "target_met": true,
+      "percentage": 15.87
+    },
+    {
+      "journal": "Journal of Cheminformatics",
+      "issn": "1758-2946",
+      "publisher": "Springer Nature / BMC",
+      "count": 10,
+      "target": 10,
+      "target_met": true,
+      "percentage": 15.87
+    }
+  ]
+}

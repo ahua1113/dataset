@@ -1,0 +1,9 @@
+﻿journal,issn,group,publisher,mode,eligible_candidates,download_attempts,new_downloads,valid_local_pdfs,target,target_met,discovery_error
+JACS Au,2691-3704,综合化学,American Chemical Society,pdf_download,334,158,10,10,10,True,
+ACS Omega,2470-1343,综合化学,American Chemical Society,pdf_download,400,233,6,6,10,False,
+ACS Materials Au,2694-2461,材料化学,American Chemical Society,pdf_download,249,147,10,10,10,True,
+RSC Advances,2046-2069,综合化学,Royal Society of Chemistry,pdf_download,400,358,2,2,10,False,
+ChemistryOpen,2191-1363,综合化学,Chemistry Europe / Wiley,pdf_download,400,197,5,5,10,False,
+Beilstein Journal of Organic Chemistry,1860-5397,有机与合成化学,Beilstein-Institut,pdf_download,11,10,10,10,10,True,
+Beilstein Journal of Nanotechnology,2190-4286,材料与纳米化学,Beilstein-Institut,pdf_download,10,10,10,10,10,True,
+Journal of Cheminformatics,1758-2946,理论与计算化学,Springer Nature / BMC,pdf_download,46,18,10,10,10,True,

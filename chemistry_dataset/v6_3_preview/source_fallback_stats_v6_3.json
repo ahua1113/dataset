@@ -1,0 +1,49 @@
+{
+  "version": "V6.3",
+  "updated_at": "2026-10-27T03:04:14.758368+00:00",
+  "total_records": 242,
+  "sources": [
+    {
+      "source_type": "arxiv",
+      "metadata_provider": "openalex",
+      "license_verification": "license_missing_manual_review",
+      "count": 6
+    },
+    {
+      "source_type": "arxiv",
+      "metadata_provider": "openalex",
+      "license_verification": "verified_open_license",
+      "count": 7
+    },
+    {
+      "source_type": "chemrxiv",
+      "metadata_provider": "openalex",
+      "license_verification": "verified_open_license",
+      "count": 6
+    },
+    {
+      "source_type": "institutional_repository",
+      "metadata_provider": "openalex",
+      "license_verification": "license_missing_manual_review",
+      "count": 2
+    },
+    {
+      "source_type": "institutional_repository",
+      "metadata_provider": "openalex",
+      "license_verification": "verified_open_license",
+      "count": 10
+    },
+    {
+      "source_type": "publisher",
+      "metadata_provider": "openalex",
+      "license_verification": "license_missing_manual_review",
+      "count": 23
+    },
+    {
+      "source_type": "publisher",
+      "metadata_provider": "openalex",
+      "license_verification": "verified_open_license",
+      "count": 188
+    }
+  ]
+}

@@ -1,0 +1,14 @@
+﻿discipline_id,discipline,count,target,gap,unique_journals,min_journals,largest_journal_share,max_journal_share,review_count,review_share,max_review_share,target_met
+organic_synthesis,有机与合成化学,20,20,0,8,3,0.35,0.4,1,0.05,0.3,True
+inorganic_coordination,无机与配位化学,20,20,0,12,3,0.2,0.4,0,0.0,0.3,True
+physical_chemistry,物理化学,20,20,0,14,3,0.2,0.4,1,0.05,0.3,True
+analytical_chemistry,分析化学,20,20,0,11,3,0.25,0.4,2,0.1,0.3,True
+theoretical_computational,理论与计算化学,20,20,0,13,3,0.15,0.4,0,0.0,0.3,True
+polymer_chemistry,高分子化学,20,20,0,12,3,0.25,0.4,0,0.0,0.3,True
+materials_nanochemistry,材料与纳米化学,20,20,0,14,3,0.15,0.4,0,0.0,0.3,True
+catalysis_surface,催化与表面化学,20,20,0,14,3,0.2,0.4,1,0.05,0.3,True
+electrochemistry_energy,电化学与能源化学,20,20,0,11,3,0.2,0.4,0,0.0,0.3,True
+biological_medicinal,生物与药物化学,20,20,0,12,3,0.3,0.4,3,0.15,0.3,True
+environmental_geochemistry,环境与地球化学,20,20,0,9,3,0.4,0.4,0,0.0,0.3,True
+chemical_engineering_industrial,化学工程与工业化学,20,20,0,11,3,0.4,0.4,0,0.0,0.3,True
+nuclear_radiochemistry,核化学与放射化学,2,20,18,2,3,0.5,0.4,0,0.0,0.3,False

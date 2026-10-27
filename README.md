@@ -1,128 +1,175 @@
-# 化学源数据采集 V6.2 — 40 刊 OA 来源池
+# 化学源数据采集 V6.3 — OA-only 多来源兜底与全学科配额
 
 ## 版本目标
 
-本阶段先把论文来源池从20刊扩展到40刊，并保留期刊、ISSN、出版机构、OA位置与许可证信息。下一阶段再把采集停止条件从“每刊固定数量”改为“每个化学学科至少20篇，允许多个期刊共同完成配额”。
+V6.3 将论文采集目标从“每本期刊固定篇数”改为“化学学科覆盖”。期刊负责限定论文质量与保存来源溯源；多本期刊可以共同完成一个学科的配额。
 
-**V6.2 只处理 OA 内容，不进行付费墙绕过、出版商登录或其他认证流程，也不抓取预印本来源。**403、429、robots.txt 拒绝等情况会记录到报告并跳过。
+默认配置包含13个化学学科，每个学科至少20篇，并同时满足：
 
-本阶段只完成期刊来源扩展，尚未启用学科分类和学科配额。视频部分保持 MIT OCW 来源，并保留 SHA-256 文件级去重。
+- 至少来自3本期刊；
+- 单一期刊占该学科的比例不超过40%；
+- 综述论文占该学科的比例不超过30%；
+- 每篇论文只有一个 `primary_discipline` 参与计数；
+- `secondary_disciplines` 只用于检索和本体扩充，不重复占用配额。
 
-> 关于“顶刊”：这是本项目**人工维护的期刊白名单**，不是机器自动判定期刊影响因子或期刊等级。数据准确性取决于白名单和 OpenAlex 期刊元数据。
+V6.3 只采集无需登录即可合法访问的 OA 资源，不包含出版商登录、校园网认证、验证码处理、付费墙绕过或 Cloudflare 绕过逻辑。
 
-## 40刊来源池的组成
+## 期刊来源池
 
-- 完整保留 V6.1 的20刊。
-- 从上传的四类40刊清单中加入其余20本专业、交叉和综述期刊。
-- 继续排除过于宽泛的 `Nature` 和 `Science`，避免仅凭期刊身份混入大量非化学论文。
-- 保留清单外但明确属于化学专业来源的 `Communications Chemistry` 和 `Nature Chemical Biology`。
+`config/journals_v6_3.json` 继承 V6.2 已通过筛选的34本期刊，并增加8本高OA候选刊：
 
-因此，V6.2 的40刊是“清单中的38本 + 2本化学专业补充刊”，不是对原始Excel 40行的原样复制。具体 ISSN、出版机构、来源和出版社域名写在 `config/journals_v6_2.json`。期刊名称和 ISSN 必须唯一。
+1. JACS Au
+2. ACS Omega
+3. ACS Materials Au
+4. RSC Advances
+5. ChemistryOpen
+6. Beilstein Journal of Organic Chemistry
+7. Beilstein Journal of Nanotechnology
+8. Journal of Cheminformatics
 
-新增20刊及核验信息见 `docs/V6_2_JOURNAL_EXPANSION.md`。
+这8本期刊的状态为 `candidate`，每刊可下载性测试阈值为10篇。建议通过测试后再使用 `--journal-stage all` 参与正式采集。V6.2 中因 OA PDF 测试失败剔除的6本期刊不会被重新加入。
 
-## 安装与替换
+## 多来源OA兜底
 
-将此包里的文件按相同目录放进 `F:\Ontology_Design_Annotation\get_data\chemistry_source_collector` 项目中。
+论文身份必须由白名单期刊的 ISSN 与 OpenAlex Source ID 确认；PDF可以来自其他合法公开位置。程序聚合 OpenAlex locations 与 Unpaywall，按以下顺序尝试：
 
-- `collector.py`：替换旧主程序。
-- `config/journals_v6_2.json`：V6.2 的40刊 OA 来源池。
-- `crawl/crawl_papers.py`：替换旧论文运行入口；已移除 `--paper-sources arxiv,nature` 参数。
-- `crawl/crawl_videos.py`：兼容的 MIT OCW 视频运行入口。
-- `requirements.txt`：依赖说明。
-- `tests/test_collector_v6_2.py`：40刊数量、唯一性和新增差集测试。
-- `docs/V6_2_JOURNAL_EXPANSION.md`：新增20刊与核验记录。
+1. 出版社公开PDF；
+2. 与该DOI关联的 arXiv 公开版本；
+3. 与该DOI关联的 ChemRxiv 公开版本；
+4. PubMed Central / Europe PMC；
+5. 机构知识库；
+6. 其他可验证OA仓储。
 
-### 第一次运行前的数据说明
+预印本只作为目标期刊论文的公开副本，不会把任意 arXiv/ChemRxiv 记录当成期刊论文。可用 `--no-allow-preprint-fallback` 禁止预印本兜底。
 
-**V6.2 本身不会删除、覆盖或自动清空任何历史数据。** 请先在本地备份旧 `chemistry_dataset` 文件夹，再人工确认是否要清理旧文件。
+每条成功记录保存：
 
-如果现有论文 `manifest.jsonl` 中还有白名单以外的来源，程序会报错并停止，防止把旧数据算进成果。也可以把 `--out` 改成新的空文件夹避免与旧数据混淆。
+- DOI、OpenAlex ID、期刊、ISSN、出版社；
+- 主学科、次学科、分类得分和分类证据；
+- OA元数据提供方、实际PDF来源类型、兜底顺序；
+- OA版本、许可证、许可证核验状态；
+- 下载URL、文件大小、SHA-256和采集时间。
 
-## 在 PyCharm 中运行
+许可证缺失不会被伪装成开放许可证，而是标记为 `license_missing_manual_review`。OA可免费下载不等于允许任意再分发或商用，后续发布数据集时必须按论文许可证处理。
 
-在项目根目录的终端执行：
+## 13个化学学科
+
+学科配置位于 `config/disciplines_v6_3.json`：
+
+- 有机与合成化学
+- 无机与配位化学
+- 物理化学
+- 分析化学
+- 理论与计算化学
+- 高分子化学
+- 材料与纳米化学
+- 催化与表面化学
+- 电化学与能源化学
+- 生物与药物化学
+- 环境与地球化学
+- 化学工程与工业化学
+- 核化学与放射化学
+
+当前分类器使用标题、OpenAlex主题/关键词、摘要和期刊学科组进行加权分类。它适合作为自动初筛和计数依据，但低分样本仍应在正式本体标注前人工复核。
+
+## 安装
 
 ```powershell
 python -m pip install -r requirements.txt
+```
+
+建议设置OpenAlex API Key，并提供联系邮箱供礼貌性 User-Agent 和 Unpaywall 使用：
+
+```cmd
+setx OPENALEX_API_KEY ""
+```
+
+```powershell
+$env:OPENALEX_API_KEY=""
+```
+
+邮箱不会写入输出文件。
+
+## 推荐运行顺序
+
+### 1. 测试8本新增候选刊
+
+先预览元数据：
+
+```powershell
+python collector.py --categories papers --feasibility-only --journal-stage candidate --per-journal-target 10 --dry-run --contact 1316400989@qq.com
+```
+
+再执行真实PDF可下载性测试：
+
+```powershell
+python collector.py --categories papers --feasibility-only --journal-stage candidate --per-journal-target 10 --download --contact 1316400989@qq.com --out chemistry_dataset/v6_3_feasibility
+```
+
+只有 `journal_feasibility_v6_3.json` 中达到10篇的期刊才应晋级正式来源池。
+
+### 2. 预览全学科采集结果
+
+```powershell
+python collector.py --categories papers --journal-stage all --dry-run --contact 1316400989@qq.com --out chemistry_dataset/v6_3_preview
+```
+
+也可以直接运行安全入口（默认不下载PDF）：
+
+```powershell
 python crawl/crawl_papers.py
 ```
 
-当前 `crawl/crawl_papers.py` 默认只做每刊1篇候选的元数据预览，不下载PDF。学科分类完成后，再改为按学科目标正式采集。
-
-也可以在终端直接运行：
+### 3. 正式采集
 
 ```powershell
-# 扩刊阶段：每刊验证1篇合格 OA 候选，不下载 PDF
-python collector.py --categories papers --per-journal-target 1 --dry-run
+python collector.py --categories papers --journal-stage all --download --contact 1316400989@qq.com --out chemistry_dataset/v6_3_papers
+```
 
-# 暂时仍可人工测试旧的逐刊逻辑，但不作为V6.2最终验收标准
-python collector.py --categories papers --per-journal-target 1 --download --out chemistry_dataset/papers_dataset
+如果新增候选刊尚未完成测试，先使用34本已验证期刊：
 
-# OpenAlex 配额要求 API key 时（PowerShell）
-$env:OPENALEX_API_KEY="你的 key"
-python crawl/crawl_papers.py
+```powershell
+python collector.py --categories papers --journal-stage validated --download --contact 1316400989@qq.com --out chemistry_dataset/v6_3_papers
+```
 
-# 核验本地已下载文件的 SHA-256（不执行采集）
-python collector.py --categories papers --audit-only --out chemistry_dataset/papers_dataset
+### 4. 离线统计与文件审计
 
-# 保留的 MIT OCW 视频功能（100 部）
-python crawl/crawl_videos.py
-
-# 离线自动测试（不访问网络）
+```powershell
+python collector.py --categories papers --journal-stage all --stats-only --out chemistry_dataset/v6_3_papers
+python collector.py --categories papers --journal-stage all --audit-only --out chemistry_dataset/v6_3_papers
 python -m unittest discover -s tests -v
 ```
 
-可通过 `--contact 邮箱` 指定礼貌性爬虫身份。它是 User-Agent 联系信息，**不是认证或登录流程**。不要把私人登录凭证写进代码。
-
-## 核心筛选流程
-
-1. 读入40刊来源池，通过期刊 ISSN 向 OpenAlex 查询 Source ID，并确认返回 ISSN 一致。
-2. **仅检索 `primary_location.source.id` 为目标期刊 Source ID 的论文**；要求 OpenAlex 类型为 `article`，标记 OA 且未撤稿。
-3. 要求 DOI 不为空；拒绝明显的 correction / retraction / editorial 等标题。
-4. 读取公开 OA PDF 地址：优先出版社公开 PDF，出版社无公开 PDF 时可退到 OpenAlex 识别的**正式发表版或接收稿版**仓储 PDF。排除预印本服务器和提交稿版本。
-5. 下载前使用 DOI / OpenAlex ID / 标题 / 下载 URL 查重。每次下载还核验文件签名及大小，流式计算 SHA-256，再和现有 SHA-256 比较。
-6. 保存合法下载文件到 `raw/papers/*.pdf`，成功后追加 `manifest.jsonl`；下载失败 / 403 / 429 记录到 `errors.jsonl`，不中断其他期刊的查询。
-
-### 关于“是否原版 PDF”
-
-**公开可下载的 OA PDF 不一定是出版社排版版 PDF。** 本程序优先下载出版社公开的 `publishedVersion`；若只存在合法公开的机构仓储 `acceptedVersion`，仍会允许下载并在 `manifest.jsonl` 里记录 `oa_pdf_source=OA_repository`、`oa_version=acceptedVersion`，确保不把接受稿误称为出版社最终排版版。若将来要求“只允许出版社最终 PDF”，可以在 `candidate_pdf_locations` 中禁止非出版社来源。
-
-**OA 可免费下载 ≠ 自动获得转载、分发、训练或再次发布的全部权限**。每条记录的 `license_note` 有许可证信息（未知时要求人工核验），应按具体论文条款使用。
-
-## 目录与记录结构
+## 主要输出
 
 ```text
-chemistry_source_collector/
-├── collector.py
-├── requirements.txt
-├── config/
-│   ├── journals_v6.json
-│   ├── journals_v6_1.json
-│   └── journals_v6_2.json
-├── crawl/
-│   ├── crawl_papers.py
-│   └── crawl_videos.py
-└── chemistry_dataset/
-    ├── papers_dataset/
-    │   ├── raw/papers/*.pdf
-    │   ├── manifest.jsonl
-    │   ├── papers_v6_2_candidates.csv
-    │   ├── papers_v6_2_filtered_out.csv
-    │   ├── journal_feasibility_v6_2.json
-    │   ├── journal_feasibility_v6_2.csv
-    │   └── errors.jsonl
-    └── videos_dataset/
-        ├── raw/videos/*.mp4
-        ├── manifest.jsonl
-        └── errors.jsonl
+chemistry_dataset/v6_3_papers/
+├── raw/papers/*.pdf
+├── manifest.jsonl
+├── errors.jsonl
+├── papers_v6_3_candidates.csv
+├── papers_v6_3_filtered_out.csv
+├── discipline_stats_v6_3.json
+├── discipline_stats_v6_3.csv
+├── discipline_journal_matrix_v6_3.csv
+├── source_fallback_stats_v6_3.json
+└── source_fallback_stats_v6_3.csv
 ```
 
-论文 `manifest.jsonl` 记录包括：`title`、`doi`、`journal`、`journal_issn`、`publisher`、`openalex_id`、`openalex_source_id`、`source_page`、`download_url`、`oa_status`、`oa_version`、`oa_pdf_source`、`oa_pdf_source_page`、`license_note`、`published_at`、`collected_at`、`file`、`bytes`、`sha256`、`status` 和 `collector_version`。
+- `discipline_stats_v6_3.*`：每个学科的数量、缺口、期刊数、最大单刊占比和综述占比；
+- `discipline_journal_matrix_v6_3.csv`：学科—期刊来源矩阵；
+- `source_fallback_stats_v6_3.json`：出版社、arXiv、ChemRxiv、PMC和机构库的实际使用情况；
+- `papers_v6_3_filtered_out.csv`：重复、未分类、配额限制、无可用PDF和下载失败原因；
+- `manifest.jsonl`：最终论文级完整溯源记录。
 
-### 当前功能边界
+## 核心安全边界
 
-- 新增20刊的 ISSN 已通过 Crossref/期刊官网核对；尚未启动按学科分类和正式PDF采集。
-- 不登录任何出版商网站、不处理验证码、不绕过 403/429、付费墙或反爬策略。失败会记录，成功总数可能低于目标。
-- SHA-256 只能找出**字节完全一致**的重复 PDF / MP4，不能识别语义内容相同或不同排版版本；同时使用 DOI 等元数据查重可补充论文级去重。
-- 论文使用40刊来源池；视频仍来自 MIT OCW，不受论文期刊来源池限制。
+- 仅HTTPS；尊重 robots.txt；限制单域请求频率；
+- 不保存账号、Cookie、校园网凭据或认证令牌；
+- 403、429、登录跳转和非PDF响应会记录后跳过；
+- 下载过程使用临时 `.part` 文件，核验PDF签名后原子移动；
+- DOI、OpenAlex ID、标题、候选URL和SHA-256多层去重；
+- 不会自动删除或覆盖旧数据；历史文件缺失或大小不符时不计入配额；
+- 无法达到某个学科配额时输出真实缺口，不伪造计数。
+
+详细架构与字段说明见 `docs/V6_3_DESIGN.md`。
