@@ -25,6 +25,9 @@ env/
 # =========================
 chemistry_dataset/
 
+# Local paper-level inventories may contain DOI, paths and hashes
+analysis/**/papers_inventory.csv
+
 # Large source files
 *.pdf
 *.mp4

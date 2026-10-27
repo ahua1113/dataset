@@ -1,0 +1,792 @@
+{
+  "generated_at": "2026-10-27T08:11:48.187360+00:00",
+  "source_roots": [
+    "papers_dataset",
+    "v6_3_feasibility"
+  ],
+  "unique_papers": 512,
+  "duplicate_records_removed": 0,
+  "journal_count": 38,
+  "discipline_count_including_unclassified": 14,
+  "publication_date_min": "2013-01-01",
+  "publication_date_max": "2026-10-24",
+  "total_pdf_bytes_reported": 1698351380,
+  "mean_pdf_bytes": 3317092.54,
+  "median_pdf_bytes": 2422326.5,
+  "local_pdf_verified": 0,
+  "analysis_only_or_unverified": 512,
+  "warnings": [],
+  "tables": {
+    "by_journal": [
+      {
+        "journal": "Nature Chemistry",
+        "count": 61,
+        "percentage": 11.91
+      },
+      {
+        "journal": "Communications Chemistry",
+        "count": 60,
+        "percentage": 11.72
+      },
+      {
+        "journal": "Nature Chemical Biology",
+        "count": 58,
+        "percentage": 11.33
+      },
+      {
+        "journal": "Nature Synthesis",
+        "count": 58,
+        "percentage": 11.33
+      },
+      {
+        "journal": "Nature Catalysis",
+        "count": 55,
+        "percentage": 10.74
+      },
+      {
+        "journal": "Nature Chemical Engineering",
+        "count": 20,
+        "percentage": 3.91
+      },
+      {
+        "journal": "Nature Energy",
+        "count": 20,
+        "percentage": 3.91
+      },
+      {
+        "journal": "Nature Materials",
+        "count": 20,
+        "percentage": 3.91
+      },
+      {
+        "journal": "Nature Nanotechnology",
+        "count": 20,
+        "percentage": 3.91
+      },
+      {
+        "journal": "ACS Materials Au",
+        "count": 10,
+        "percentage": 1.95
+      },
+      {
+        "journal": "Beilstein Journal of Nanotechnology",
+        "count": 10,
+        "percentage": 1.95
+      },
+      {
+        "journal": "Beilstein Journal of Organic Chemistry",
+        "count": 10,
+        "percentage": 1.95
+      },
+      {
+        "journal": "JACS Au",
+        "count": 10,
+        "percentage": 1.95
+      },
+      {
+        "journal": "Journal of Cheminformatics",
+        "count": 10,
+        "percentage": 1.95
+      },
+      {
+        "journal": "Nature Communications",
+        "count": 10,
+        "percentage": 1.95
+      },
+      {
+        "journal": "Nature Reviews Chemistry",
+        "count": 10,
+        "percentage": 1.95
+      },
+      {
+        "journal": "Nature Reviews Materials",
+        "count": 10,
+        "percentage": 1.95
+      },
+      {
+        "journal": "Nature Sustainability",
+        "count": 10,
+        "percentage": 1.95
+      },
+      {
+        "journal": "Chem",
+        "count": 7,
+        "percentage": 1.37
+      },
+      {
+        "journal": "ACS Omega",
+        "count": 6,
+        "percentage": 1.17
+      },
+      {
+        "journal": "ChemistryOpen",
+        "count": 5,
+        "percentage": 0.98
+      },
+      {
+        "journal": "Chemical Science",
+        "count": 3,
+        "percentage": 0.59
+      },
+      {
+        "journal": "Energy & Environmental Science",
+        "count": 3,
+        "percentage": 0.59
+      },
+      {
+        "journal": "Joule",
+        "count": 3,
+        "percentage": 0.59
+      },
+      {
+        "journal": "Matter",
+        "count": 3,
+        "percentage": 0.59
+      },
+      {
+        "journal": "ACS Catalysis",
+        "count": 2,
+        "percentage": 0.39
+      },
+      {
+        "journal": "ACS Energy Letters",
+        "count": 2,
+        "percentage": 0.39
+      },
+      {
+        "journal": "Journal of Materials Chemistry A",
+        "count": 2,
+        "percentage": 0.39
+      },
+      {
+        "journal": "Journal of the American Chemical Society",
+        "count": 2,
+        "percentage": 0.39
+      },
+      {
+        "journal": "Materials Horizons",
+        "count": 2,
+        "percentage": 0.39
+      },
+      {
+        "journal": "National Science Review",
+        "count": 2,
+        "percentage": 0.39
+      },
+      {
+        "journal": "RSC Advances",
+        "count": 2,
+        "percentage": 0.39
+      },
+      {
+        "journal": "ACS Central Science",
+        "count": 1,
+        "percentage": 0.2
+      },
+      {
+        "journal": "ACS Nano",
+        "count": 1,
+        "percentage": 0.2
+      },
+      {
+        "journal": "Advanced Energy Materials",
+        "count": 1,
+        "percentage": 0.2
+      },
+      {
+        "journal": "Chemical Engineering Journal",
+        "count": 1,
+        "percentage": 0.2
+      },
+      {
+        "journal": "Chemical Society Reviews",
+        "count": 1,
+        "percentage": 0.2
+      },
+      {
+        "journal": "Chemistry of Materials",
+        "count": 1,
+        "percentage": 0.2
+      }
+    ],
+    "by_discipline": [
+      {
+        "discipline": "未分类",
+        "count": 103,
+        "percentage": 20.12
+      },
+      {
+        "discipline": "生物与药物化学",
+        "count": 97,
+        "percentage": 18.95
+      },
+      {
+        "discipline": "材料与纳米化学",
+        "count": 75,
+        "percentage": 14.65
+      },
+      {
+        "discipline": "催化与表面化学",
+        "count": 67,
+        "percentage": 13.09
+      },
+      {
+        "discipline": "有机与合成化学",
+        "count": 65,
+        "percentage": 12.7
+      },
+      {
+        "discipline": "电化学与能源化学",
+        "count": 43,
+        "percentage": 8.4
+      },
+      {
+        "discipline": "化学工程与工业化学",
+        "count": 18,
+        "percentage": 3.52
+      },
+      {
+        "discipline": "环境与地球化学",
+        "count": 11,
+        "percentage": 2.15
+      },
+      {
+        "discipline": "物理化学",
+        "count": 7,
+        "percentage": 1.37
+      },
+      {
+        "discipline": "理论与计算化学",
+        "count": 7,
+        "percentage": 1.37
+      },
+      {
+        "discipline": "分析化学",
+        "count": 6,
+        "percentage": 1.17
+      },
+      {
+        "discipline": "无机与配位化学",
+        "count": 5,
+        "percentage": 0.98
+      },
+      {
+        "discipline": "高分子化学",
+        "count": 5,
+        "percentage": 0.98
+      },
+      {
+        "discipline": "核化学与放射化学",
+        "count": 3,
+        "percentage": 0.59
+      }
+    ],
+    "by_publication_year": [
+      {
+        "publication_year": "2026",
+        "count": 374,
+        "percentage": 73.05
+      },
+      {
+        "publication_year": "2025",
+        "count": 97,
+        "percentage": 18.95
+      },
+      {
+        "publication_year": "2024",
+        "count": 28,
+        "percentage": 5.47
+      },
+      {
+        "publication_year": "2018",
+        "count": 3,
+        "percentage": 0.59
+      },
+      {
+        "publication_year": "2022",
+        "count": 3,
+        "percentage": 0.59
+      },
+      {
+        "publication_year": "2021",
+        "count": 2,
+        "percentage": 0.39
+      },
+      {
+        "publication_year": "2023",
+        "count": 2,
+        "percentage": 0.39
+      },
+      {
+        "publication_year": "2013",
+        "count": 1,
+        "percentage": 0.2
+      },
+      {
+        "publication_year": "2019",
+        "count": 1,
+        "percentage": 0.2
+      },
+      {
+        "publication_year": "2020",
+        "count": 1,
+        "percentage": 0.2
+      }
+    ],
+    "by_publication_month": [
+      {
+        "publication_month": "2026-09",
+        "count": 90,
+        "percentage": 17.58
+      },
+      {
+        "publication_month": "2026-10",
+        "count": 82,
+        "percentage": 16.02
+      },
+      {
+        "publication_month": "2026-06",
+        "count": 39,
+        "percentage": 7.62
+      },
+      {
+        "publication_month": "2026-08",
+        "count": 38,
+        "percentage": 7.42
+      },
+      {
+        "publication_month": "2026-07",
+        "count": 33,
+        "percentage": 6.45
+      },
+      {
+        "publication_month": "2026-01",
+        "count": 23,
+        "percentage": 4.49
+      },
+      {
+        "publication_month": "2026-04",
+        "count": 19,
+        "percentage": 3.71
+      },
+      {
+        "publication_month": "2026-05",
+        "count": 19,
+        "percentage": 3.71
+      },
+      {
+        "publication_month": "2026-03",
+        "count": 16,
+        "percentage": 3.12
+      },
+      {
+        "publication_month": "2026-02",
+        "count": 15,
+        "percentage": 2.93
+      },
+      {
+        "publication_month": "2025-06",
+        "count": 13,
+        "percentage": 2.54
+      },
+      {
+        "publication_month": "2025-11",
+        "count": 12,
+        "percentage": 2.34
+      },
+      {
+        "publication_month": "2025-12",
+        "count": 11,
+        "percentage": 2.15
+      },
+      {
+        "publication_month": "2025-01",
+        "count": 10,
+        "percentage": 1.95
+      },
+      {
+        "publication_month": "2025-08",
+        "count": 10,
+        "percentage": 1.95
+      },
+      {
+        "publication_month": "2025-09",
+        "count": 9,
+        "percentage": 1.76
+      },
+      {
+        "publication_month": "2025-04",
+        "count": 8,
+        "percentage": 1.56
+      },
+      {
+        "publication_month": "2025-02",
+        "count": 7,
+        "percentage": 1.37
+      },
+      {
+        "publication_month": "2025-10",
+        "count": 7,
+        "percentage": 1.37
+      },
+      {
+        "publication_month": "2024-04",
+        "count": 4,
+        "percentage": 0.78
+      },
+      {
+        "publication_month": "2024-10",
+        "count": 4,
+        "percentage": 0.78
+      },
+      {
+        "publication_month": "2025-05",
+        "count": 4,
+        "percentage": 0.78
+      },
+      {
+        "publication_month": "2024-01",
+        "count": 3,
+        "percentage": 0.59
+      },
+      {
+        "publication_month": "2024-07",
+        "count": 3,
+        "percentage": 0.59
+      },
+      {
+        "publication_month": "2024-09",
+        "count": 3,
+        "percentage": 0.59
+      },
+      {
+        "publication_month": "2024-12",
+        "count": 3,
+        "percentage": 0.59
+      },
+      {
+        "publication_month": "2025-03",
+        "count": 3,
+        "percentage": 0.59
+      },
+      {
+        "publication_month": "2025-07",
+        "count": 3,
+        "percentage": 0.59
+      },
+      {
+        "publication_month": "2024-02",
+        "count": 2,
+        "percentage": 0.39
+      },
+      {
+        "publication_month": "2024-08",
+        "count": 2,
+        "percentage": 0.39
+      },
+      {
+        "publication_month": "2024-11",
+        "count": 2,
+        "percentage": 0.39
+      },
+      {
+        "publication_month": "2013-01",
+        "count": 1,
+        "percentage": 0.2
+      },
+      {
+        "publication_month": "2018-01",
+        "count": 1,
+        "percentage": 0.2
+      },
+      {
+        "publication_month": "2018-03",
+        "count": 1,
+        "percentage": 0.2
+      },
+      {
+        "publication_month": "2018-08",
+        "count": 1,
+        "percentage": 0.2
+      },
+      {
+        "publication_month": "2019-09",
+        "count": 1,
+        "percentage": 0.2
+      },
+      {
+        "publication_month": "2020-05",
+        "count": 1,
+        "percentage": 0.2
+      },
+      {
+        "publication_month": "2021-10",
+        "count": 1,
+        "percentage": 0.2
+      },
+      {
+        "publication_month": "2021-12",
+        "count": 1,
+        "percentage": 0.2
+      },
+      {
+        "publication_month": "2022-01",
+        "count": 1,
+        "percentage": 0.2
+      },
+      {
+        "publication_month": "2022-06",
+        "count": 1,
+        "percentage": 0.2
+      },
+      {
+        "publication_month": "2022-10",
+        "count": 1,
+        "percentage": 0.2
+      },
+      {
+        "publication_month": "2023-09",
+        "count": 1,
+        "percentage": 0.2
+      },
+      {
+        "publication_month": "2023-12",
+        "count": 1,
+        "percentage": 0.2
+      },
+      {
+        "publication_month": "2024-03",
+        "count": 1,
+        "percentage": 0.2
+      },
+      {
+        "publication_month": "2024-05",
+        "count": 1,
+        "percentage": 0.2
+      }
+    ],
+    "by_publisher": [
+      {
+        "publisher": "Nature Portfolio",
+        "count": 412,
+        "percentage": 80.47
+      },
+      {
+        "publisher": "American Chemical Society",
+        "count": 35,
+        "percentage": 6.84
+      },
+      {
+        "publisher": "Beilstein-Institut",
+        "count": 20,
+        "percentage": 3.91
+      },
+      {
+        "publisher": "Cell Press / Elsevier",
+        "count": 13,
+        "percentage": 2.54
+      },
+      {
+        "publisher": "Royal Society of Chemistry",
+        "count": 13,
+        "percentage": 2.54
+      },
+      {
+        "publisher": "Springer Nature / BMC",
+        "count": 10,
+        "percentage": 1.95
+      },
+      {
+        "publisher": "Chemistry Europe / Wiley",
+        "count": 5,
+        "percentage": 0.98
+      },
+      {
+        "publisher": "Oxford University Press",
+        "count": 2,
+        "percentage": 0.39
+      },
+      {
+        "publisher": "Elsevier",
+        "count": 1,
+        "percentage": 0.2
+      },
+      {
+        "publisher": "Wiley",
+        "count": 1,
+        "percentage": 0.2
+      }
+    ],
+    "by_oa_status": [
+      {
+        "oa_status": "hybrid",
+        "count": 306,
+        "percentage": 59.77
+      },
+      {
+        "oa_status": "gold",
+        "count": 116,
+        "percentage": 22.66
+      },
+      {
+        "oa_status": "bronze",
+        "count": 56,
+        "percentage": 10.94
+      },
+      {
+        "oa_status": "diamond",
+        "count": 24,
+        "percentage": 4.69
+      },
+      {
+        "oa_status": "green",
+        "count": 10,
+        "percentage": 1.95
+      }
+    ],
+    "by_pdf_source": [
+      {
+        "oa_pdf_source": "publisher",
+        "count": 431,
+        "percentage": 84.18
+      },
+      {
+        "oa_pdf_source": "OA_repository",
+        "count": 38,
+        "percentage": 7.42
+      },
+      {
+        "oa_pdf_source": "institutional_repository",
+        "count": 24,
+        "percentage": 4.69
+      },
+      {
+        "oa_pdf_source": "arxiv",
+        "count": 19,
+        "percentage": 3.71
+      }
+    ],
+    "by_oa_version": [
+      {
+        "oa_version": "publishedVersion",
+        "count": 431,
+        "percentage": 84.18
+      },
+      {
+        "oa_version": "acceptedVersion",
+        "count": 62,
+        "percentage": 12.11
+      },
+      {
+        "oa_version": "submittedVersion",
+        "count": 19,
+        "percentage": 3.71
+      }
+    ],
+    "by_license": [
+      {
+        "license": "CC-BY",
+        "count": 309,
+        "percentage": 60.35
+      },
+      {
+        "license": "CC-BY-NC-ND",
+        "count": 103,
+        "percentage": 20.12
+      },
+      {
+        "license": "CHECK_ARTICLE_SPECIFIC_LICENSE",
+        "count": 82,
+        "percentage": 16.02
+      },
+      {
+        "license": "other-oa",
+        "count": 10,
+        "percentage": 1.95
+      },
+      {
+        "license": "CC-BY-SA",
+        "count": 4,
+        "percentage": 0.78
+      },
+      {
+        "license": "CC-BY-NC-SA",
+        "count": 3,
+        "percentage": 0.59
+      },
+      {
+        "license": "PUBLIC-DOMAIN",
+        "count": 1,
+        "percentage": 0.2
+      }
+    ],
+    "by_collector_version": [
+      {
+        "collector_version": "6.0",
+        "count": 300,
+        "percentage": 58.59
+      },
+      {
+        "collector_version": "6.1",
+        "count": 99,
+        "percentage": 19.34
+      },
+      {
+        "collector_version": "6.3",
+        "count": 63,
+        "percentage": 12.3
+      },
+      {
+        "collector_version": "6.2",
+        "count": 50,
+        "percentage": 9.77
+      }
+    ],
+    "by_discipline_origin": [
+      {
+        "discipline_origin": "reclassified_available_metadata",
+        "count": 453,
+        "percentage": 88.48
+      },
+      {
+        "discipline_origin": "manifest",
+        "count": 59,
+        "percentage": 11.52
+      }
+    ],
+    "by_resource_kind": [
+      {
+        "resource_kind": "research_article",
+        "count": 511,
+        "percentage": 99.8
+      },
+      {
+        "resource_kind": "review_article",
+        "count": 1,
+        "percentage": 0.2
+      }
+    ],
+    "by_file_size_bucket": [
+      {
+        "file_size_bucket": "1-5 MiB",
+        "count": 346,
+        "percentage": 67.58
+      },
+      {
+        "file_size_bucket": "5-10 MiB",
+        "count": 82,
+        "percentage": 16.02
+      },
+      {
+        "file_size_bucket": "<1 MiB",
+        "count": 73,
+        "percentage": 14.26
+      },
+      {
+        "file_size_bucket": "10-25 MiB",
+        "count": 11,
+        "percentage": 2.15
+      }
+    ]
+  }
+}

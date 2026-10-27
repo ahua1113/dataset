@@ -50,6 +50,7 @@ chemistry_collector/
 ├── policy.py        # 期刊优先级、排除规则与尝试预算
 ├── discovery.py     # OpenAlex/Unpaywall发现与论文筛选
 ├── disciplines.py   # 学科分类、配额和报告
+├── analysis.py      # 论文目录合并、去重与量化分析
 ├── feasibility.py   # 逐刊可行性测试
 ├── papers.py        # 正式按学科采集
 ├── storage.py       # 下载、SHA-256、manifest和CSV审计
@@ -180,6 +181,39 @@ PowerShell 直接检查 JSONL 时请显式指定 UTF-8，避免 Windows PowerShe
 Get-Content -Encoding UTF8 chemistry_dataset/v6_3_papers/manifest.jsonl |
   ForEach-Object { $_ | ConvertFrom-Json }
 ```
+
+### 5. 合并已有论文并生成量化分析
+
+先只分析当前 `chemistry_dataset` 下能够发现的所有论文目录，不移动或删除文件：
+
+```powershell
+python tools/consolidate_papers.py
+```
+
+确认统计无误后，将不同采集批次的 PDF 去重复制到
+`chemistry_dataset/papers/raw/papers/`，并生成统一 manifest：
+
+```powershell
+python tools/consolidate_papers.py --consolidate
+```
+
+最后如需删除已经合并的 `v6_3_feasibility`、smoke、preview 等源目录，必须显式确认：
+
+```powershell
+python tools/consolidate_papers.py --consolidate --cleanup-sources --yes
+```
+
+建议第一次使用复制模式，不要增加 `--move-files`。量化结果统一保存在
+`chemistry_dataset/quantitative_analysis/`，包括：
+
+- `quantitative_summary.json`：总量、重复量、期刊数、时间范围与文件大小；
+- `by_journal.csv`、`by_discipline.csv`：按期刊和学科计数；
+- `by_publication_year.csv`、`by_publication_month.csv`：按发表时间计数；
+- 出版社、OA状态、PDF来源、OA版本、许可证、采集器版本、文章类型、分类来源和文件大小区间统计；
+- `discipline_journal_matrix.csv`、`discipline_year_matrix.csv`：交叉统计；
+- `data_quality.csv`：缺失 DOI、日期、许可证、未分类和本地文件状态；
+- `papers_inventory.csv`：去重后的论文级标准化清单；包含 DOI、相对路径和
+  SHA-256，仅在本地生成，不提交到代码仓库。
 
 ## 主要输出
 
