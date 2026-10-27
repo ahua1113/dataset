@@ -12,18 +12,18 @@ PREVIOUS = ROOT / "config" / "journals_v6_1.json"
 
 
 class CollectorV62JournalExpansionTests(unittest.TestCase):
-    def test_whitelist_has_forty_unique_valid_journals(self):
+    def test_whitelist_has_thirty_four_unique_valid_journals(self):
         journals = collector.load_journals(JOURNALS)
-        self.assertEqual(40, len(journals))
-        self.assertEqual(40, len({j.name.casefold() for j in journals}))
-        self.assertEqual(40, len({j.issn.upper() for j in journals}))
+        self.assertEqual(34, len(journals))
+        self.assertEqual(34, len({j.name.casefold() for j in journals}))
+        self.assertEqual(34, len({j.issn.upper() for j in journals}))
 
-    def test_previous_twenty_are_retained_and_twenty_are_added(self):
+    def test_previous_twenty_are_retained_and_fourteen_are_added(self):
         previous = {j.name for j in collector.load_journals(PREVIOUS)}
         current = {j.name for j in collector.load_journals(JOURNALS)}
         self.assertTrue(previous.issubset(current))
-        self.assertEqual(20, len(current - previous))
-        self.assertIn("Angewandte Chemie International Edition", current)
+        self.assertEqual(14, len(current - previous))
+        self.assertNotIn("Angewandte Chemie International Edition", current)
         self.assertIn("Nature Reviews Chemistry", current)
 
     def test_broad_nature_and_science_are_deliberately_excluded(self):
@@ -43,7 +43,7 @@ class CollectorV62JournalExpansionTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "journals_v6_2.json"
             path.write_text(json.dumps(rows[:-1]), encoding="utf-8")
-            with self.assertRaisesRegex(ValueError, "exactly 40"):
+            with self.assertRaisesRegex(ValueError, "exactly 34"):
                 collector.load_journals(path)
 
 

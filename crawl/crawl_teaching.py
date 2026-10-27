@@ -12,7 +12,6 @@ cmd = [
     "--limit", "100",
     "--download",
     "--out", str(ROOT / "chemistry_dataset" / "teaching_dataset"),
-    "--contact", "1316400989@qq.com",
 ]
 
 subprocess.run(cmd, cwd=ROOT, check=True)
