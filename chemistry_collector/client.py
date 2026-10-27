@@ -53,6 +53,11 @@ class Client:
     def record_access_success(self, host: str) -> None:
         self.domain_failures.pop(host, None)
 
+    def is_circuit_open(self, url_or_host: str) -> bool:
+        """供调度层在计入实际下载尝试前跳过已熔断的域名。"""
+        host = hostname(url_or_host) or url_or_host.strip().casefold()
+        return host in self.circuit_open_hosts
+
     def wait(self, url: str) -> None:
         host = hostname(url)
         gap = 1.0
@@ -89,7 +94,7 @@ class Client:
         if not is_https(url):
             raise SourceError("Only HTTPS links are allowed")
         host = hostname(url)
-        if not api and host in self.circuit_open_hosts:
+        if not api and self.is_circuit_open(host):
             raise SourceError(
                 f"Domain circuit open after {self.domain_failure_threshold} "
                 f"consecutive access failures: {host}"

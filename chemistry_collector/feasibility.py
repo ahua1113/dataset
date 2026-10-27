@@ -57,7 +57,8 @@ def collect_papers(client: Client, args, root: Path) -> None:
     if all(count >= per_journal_target for count in counts.values()) and not args.dry_run:
         print(f"[V{COLLECTOR_VERSION}] Every journal target already reached; nothing to download.", flush=True)
         states = [{"journal": journal, "tried": 0, "previewed": 0,
-                   "download_attempts": 0, "success": 0, "error": ""}
+                   "download_attempts": 0, "circuit_skips": 0,
+                   "success": 0, "error": ""}
                   for journal in journals]
         save_feasibility_report(root, states, counts, per_journal_target, False)
         print_journal_stats(counts)
@@ -84,6 +85,7 @@ def collect_papers(client: Client, args, root: Path) -> None:
          "active": args.dry_run or counts[j.name] < per_journal_target,
          "success": 0, "tried": 0, "previewed": 0,
          "download_attempts": 0,
+         "circuit_skips": 0, "reported_circuit_hosts": set(),
          "max_download_attempts": policy_for(policies, j).max_download_attempts,
          "error": ""}
         for j in journals
@@ -174,6 +176,19 @@ def collect_papers(client: Client, args, root: Path) -> None:
                     state["active"] = False
                     break
                 url = location["url"]
+                circuit_is_open = getattr(client, "is_circuit_open", lambda _url: False)
+                if circuit_is_open(url):
+                    host = location.get("oa_host") or url
+                    state["circuit_skips"] += 1
+                    last_error = f"domain circuit already open: {host}"
+                    if host not in state["reported_circuit_hosts"]:
+                        state["reported_circuit_hosts"].add(host)
+                        print(
+                            f"[CIRCUIT-SKIP] {journal.name}: {host}; "
+                            "trying remaining OA mirrors",
+                            flush=True,
+                        )
+                    continue
                 state["download_attempts"] += 1
                 record_item = {**item,
                                "oa_version": location["version"],
@@ -235,7 +250,9 @@ def collect_papers(client: Client, args, root: Path) -> None:
         print(
             f"  {state['journal'].name}: tried={state['tried']} "
             f"previewed={state['previewed']} downloaded={state['success']} "
-            f"valid_local={counts[state['journal'].name]}"
+            f"valid_local={counts[state['journal'].name]} "
+            f"http_attempts={state['download_attempts']} "
+            f"circuit_skips={state['circuit_skips']}"
         )
     unmet = [name for name, count in counts.items() if count < per_journal_target]
     if not args.dry_run and args.download and unmet:

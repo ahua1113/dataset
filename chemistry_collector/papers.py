@@ -92,6 +92,8 @@ def collect_papers_v6_3(client: Client, args, root: Path) -> None:
         "tried": 0,
         "accepted": 0,
         "download_attempts": 0,
+        "circuit_skips": 0,
+        "reported_circuit_hosts": set(),
         "max_download_attempts": policy_for(
             policies, journal
         ).max_download_attempts,
@@ -212,6 +214,19 @@ def collect_papers_v6_3(client: Client, args, root: Path) -> None:
                     state["active"] = False
                     break
                 url = location["url"]
+                circuit_is_open = getattr(client, "is_circuit_open", lambda _url: False)
+                if circuit_is_open(url):
+                    host = location.get("oa_host") or url
+                    state["circuit_skips"] += 1
+                    last_error = f"domain circuit already open: {host}"
+                    if host not in state["reported_circuit_hosts"]:
+                        state["reported_circuit_hosts"].add(host)
+                        print(
+                            f"[CIRCUIT-SKIP] {journal.name}: {host}; "
+                            "trying remaining OA mirrors",
+                            flush=True,
+                        )
+                    continue
                 state["download_attempts"] += 1
                 record_item = {
                     **item,
@@ -288,6 +303,14 @@ def collect_papers_v6_3(client: Client, args, root: Path) -> None:
         f"disciplines_met={report['disciplines_meeting_target']}/{len(disciplines)}",
         flush=True,
     )
+    for state in states:
+        print(
+            f"  [SOURCE STATS] {state['journal'].name}: "
+            f"http_attempts={state['download_attempts']} "
+            f"circuit_skips={state['circuit_skips']} "
+            f"downloaded={state['downloaded']}",
+            flush=True,
+        )
     for row in report["disciplines"]:
         print(
             f"  {row['discipline']}: {row['count']}/{row['target']} "

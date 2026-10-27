@@ -22,23 +22,11 @@ class Journal:
     feasibility_target: int = 0
 
 
-# 加载可继承的期刊列表，并检查总数、重复项及必要字段。
+# 加载当前期刊列表，并检查总数、重复项及必要字段。
 def load_journals(path: Path) -> list[Journal]:
     if not path.is_file():
         raise FileNotFoundError(f"Journal whitelist missing: {path}")
     data = json.loads(path.read_text(encoding="utf-8"))
-    if isinstance(data, dict):
-        base_name = str(data.get("extends") or "").strip()
-        additions = data.get("journals")
-        if not base_name or Path(base_name).name != base_name:
-            raise ValueError("Extended journal config requires a safe local 'extends' filename")
-        if not isinstance(additions, list):
-            raise ValueError("Extended journal config requires a 'journals' array")
-        base_path = path.parent / base_name
-        base_data = json.loads(base_path.read_text(encoding="utf-8"))
-        if not isinstance(base_data, list):
-            raise ValueError("Base journal whitelist must be a JSON array")
-        data = base_data + additions
     expected_size = CONFIG_WHITELIST_SIZES.get(path.name)
     if not isinstance(data, list) or not data:
         raise ValueError("Journal whitelist must be a non-empty JSON array")

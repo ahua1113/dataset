@@ -7,9 +7,6 @@ ROOT = Path(__file__).resolve().parents[1]
 COLLECTOR_VERSION = "6.3"
 WHITELIST_SIZE = 42
 CONFIG_WHITELIST_SIZES = {
-    "journals_v6.json": 10,
-    "journals_v6_1.json": 20,
-    "journals_v6_2.json": 34,
     "journals_v6_3.json": 42,
 }
 OPENALEX_SOURCES = "https://api.openalex.org/sources"

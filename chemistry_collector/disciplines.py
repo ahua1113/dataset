@@ -198,15 +198,29 @@ def normalize_license(value: str) -> tuple[str, str]:
     return "CHECK_ARTICLE_SPECIFIC_LICENSE", "license_missing_manual_review"
 
 
+PREPRINT_SOURCE_DOMAINS = {
+    "arxiv.org": "arxiv",
+    "chemrxiv.org": "chemrxiv",
+    "biorxiv.org": "biorxiv",
+    "medrxiv.org": "medrxiv",
+    "researchsquare.com": "research_square",
+}
+PREPRINT_SOURCE_TYPES = frozenset(PREPRINT_SOURCE_DOMAINS.values())
+
+
+def is_preprint_source(source_type: str) -> bool:
+    """判断规范化后的OA来源类型是否属于预印本平台。"""
+    return source_type in PREPRINT_SOURCE_TYPES
+
+
 def classify_source(url: str, landing_page: str, publisher_hosts: tuple[str, ...],
                     source_type: str = "") -> str:
     hosts = {_host(url), _host(landing_page)} - {""}
     if any(any(_domain_matches(host, domain) for domain in publisher_hosts) for host in hosts):
         return "publisher"
-    if any(_domain_matches(host, "arxiv.org") for host in hosts):
-        return "arxiv"
-    if any(_domain_matches(host, "chemrxiv.org") for host in hosts):
-        return "chemrxiv"
+    for domain, preprint_type in PREPRINT_SOURCE_DOMAINS.items():
+        if any(_domain_matches(host, domain) for host in hosts):
+            return preprint_type
     if any(_domain_matches(host, domain) for host in hosts
            for domain in ("ncbi.nlm.nih.gov", "europepmc.org")):
         return "pmc_europepmc"
@@ -219,9 +233,12 @@ SOURCE_PRIORITY = {
     "publisher": 0,
     "arxiv": 1,
     "chemrxiv": 2,
-    "pmc_europepmc": 3,
-    "institutional_repository": 4,
-    "other_oa_repository": 5,
+    "biorxiv": 3,
+    "medrxiv": 4,
+    "research_square": 5,
+    "pmc_europepmc": 6,
+    "institutional_repository": 7,
+    "other_oa_repository": 8,
 }
 
 
@@ -243,13 +260,15 @@ def openalex_locations(work: dict, publisher_hosts: tuple[str, ...],
         source_kind = classify_source(
             url, landing, publisher_hosts, str(source.get("type") or "")
         )
-        if source_kind in {"arxiv", "chemrxiv"} and not allow_preprints:
+        if is_preprint_source(source_kind) and not allow_preprints:
             continue
         version = str(location.get("version") or "unknown")
+        if is_preprint_source(source_kind):
+            version = "submittedVersion"
         publisher_source = str(source.get("id") or "").rstrip("/").split("/")[-1].casefold() == source_id.casefold()
         if source_kind == "publisher":
             publisher_source = True
-        if (source_kind not in {"publisher", "arxiv", "chemrxiv"}
+        if (source_kind != "publisher" and not is_preprint_source(source_kind)
                 and version not in {"publishedVersion", "acceptedVersion"}):
             continue
         license_note, license_status = normalize_license(str(location.get("license") or ""))
@@ -284,10 +303,12 @@ def unpaywall_locations(data: dict, publisher_hosts: tuple[str, ...],
         landing = str(location.get("url_for_landing_page") or "").strip()
         host_type = str(location.get("host_type") or "")
         source_kind = classify_source(url, landing, publisher_hosts, host_type)
-        if source_kind in {"arxiv", "chemrxiv"} and not allow_preprints:
+        if is_preprint_source(source_kind) and not allow_preprints:
             continue
         version = str(location.get("version") or "unknown")
-        if (source_kind not in {"publisher", "arxiv", "chemrxiv"}
+        if is_preprint_source(source_kind):
+            version = "submittedVersion"
+        if (source_kind != "publisher" and not is_preprint_source(source_kind)
                 and version not in {"publishedVersion", "acceptedVersion"}):
             continue
         license_note, license_status = normalize_license(str(location.get("license") or ""))

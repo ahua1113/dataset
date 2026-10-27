@@ -19,6 +19,7 @@ V6.3 将“论文质量来源”和“数据集覆盖目标”分开：期刊白
 
 连续的401/403/429或robots拒绝会累计到域名熔断器。达到阈值后，本轮直接跳过该域名，
 但仍可继续尝试同一论文的机构库、预印本或其他合法OA位置。
+熔断后的候选不计入实际 HTTP 下载尝试预算，并在可行性报告中单列为 `circuit_skips`。
 
 ## 配额口径
 
@@ -53,19 +54,21 @@ V6.3 将“论文质量来源”和“数据集覆盖目标”分开：期刊白
 - `resources.py`：视频、讲义、方法和教材；
 - `cli.py`：参数解析和流程调度。
 
-根目录 `collector.py` 和 `v6_3_core.py` 仅承担旧命令/导入兼容，不再承载实现。
+根目录 `collector.py` 提供稳定命令行入口，不承载核心实现。运行输出位于已忽略的
+`chemistry_dataset/`，避免测试数据、错误日志和本地路径混入源代码历史。
 
 ## OA来源与版本
 
 PDF来源与元数据提供方分开记录。例如，OpenAlex可能发现一份arXiv副本，Unpaywall可能发现一份机构库接受稿：
 
 - `oa_metadata_provider`：`openalex` 或 `unpaywall`；
-- `oa_pdf_source`：`publisher`、`arxiv`、`chemrxiv`、`pmc_europepmc`、`institutional_repository` 或 `other_oa_repository`；
+- `oa_pdf_source`：`publisher`、各预印本平台、`pmc_europepmc`、`institutional_repository` 或 `other_oa_repository`；
 - `oa_version`：`publishedVersion`、`acceptedVersion`、`submittedVersion` 或 `unknown`；
 - `source_fallback_rank`：本篇论文实际尝试链中的顺序；
 - `oa_fallback_chain`：候选URL、来源、版本、许可证和主机的完整列表。
 
 预印本兜底必须满足两个条件：论文已由期刊主来源和DOI确认；预印本位置由 OpenAlex 或 Unpaywall 与该论文关联。预印本不会取代期刊身份字段。
+V6.3 可识别 arXiv、ChemRxiv、bioRxiv、medRxiv 与 Research Square，且统一将其版本记录为 `submittedVersion`；关闭预印本兜底时会同时排除这些平台。
 
 ## 分类边界
 

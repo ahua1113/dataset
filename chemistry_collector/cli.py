@@ -52,7 +52,8 @@ def main() -> None:
     parser.add_argument(
         "--allow-preprint-fallback", action=argparse.BooleanOptionalAction,
         default=True,
-        help="allow DOI-linked arXiv/ChemRxiv copy after journal identity is verified",
+        help=("allow DOI-linked arXiv/ChemRxiv/bioRxiv/medRxiv/Research Square "
+              "copy after journal identity is verified"),
     )
     parser.add_argument(
         "--use-unpaywall", action=argparse.BooleanOptionalAction, default=True,

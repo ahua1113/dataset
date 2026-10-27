@@ -16,7 +16,7 @@ V6.3 只采集无需登录即可合法访问的 OA 资源，不包含出版商�
 
 ## 期刊来源池
 
-`config/journals_v6_3.json` 继承 V6.2 已通过筛选的34本期刊，并增加8本高OA候选刊：
+`config/journals_v6_3.json` 是独立的42刊白名单：34本已验证期刊，加上8本高OA候选刊：
 
 1. JACS Au
 2. ACS Omega
@@ -40,7 +40,7 @@ V6.3 只采集无需登录即可合法访问的 OA 资源，不包含出版商�
 
 ## 项目结构
 
-`collector.py` 只保留兼容入口，主要实现已拆分到 `chemistry_collector/`：
+`collector.py` 是稳定的命令行入口，主要实现位于 `chemistry_collector/`：
 
 ```text
 chemistry_collector/
@@ -57,20 +57,19 @@ chemistry_collector/
 └── resources.py     # 视频、讲义、方法和教材
 ```
 
-`v6_3_core.py` 作为旧导入路径的兼容层保留。
+运行产生的 PDF、manifest、错误日志和统计报告统一写入 `chemistry_dataset/`，该目录已整体加入 `.gitignore`。源代码仓库不再保存可重新生成的运行结果；需要长期保存的原始数据应进入独立数据仓库。
 
 ## 多来源OA兜底
 
 论文身份必须由白名单期刊的 ISSN 与 OpenAlex Source ID 确认；PDF可以来自其他合法公开位置。程序聚合 OpenAlex locations 与 Unpaywall，按以下顺序尝试：
 
 1. 出版社公开PDF；
-2. 与该DOI关联的 arXiv 公开版本；
-3. 与该DOI关联的 ChemRxiv 公开版本；
-4. PubMed Central / Europe PMC；
-5. 机构知识库；
-6. 其他可验证OA仓储。
+2. 与该DOI关联的 arXiv / ChemRxiv / bioRxiv / medRxiv / Research Square 公开预印本；
+3. PubMed Central / Europe PMC；
+4. 机构知识库；
+5. 其他可验证OA仓储。
 
-预印本只作为目标期刊论文的公开副本，不会把任意 arXiv/ChemRxiv 记录当成期刊论文。可用 `--no-allow-preprint-fallback` 禁止预印本兜底。
+预印本只作为目标期刊论文的公开副本，不会把任意预印本记录当成期刊论文。可用 `--no-allow-preprint-fallback` 统一禁止上述所有预印本平台兜底；其版本固定记录为 `submittedVersion`，避免被上游元数据误标为接受稿。
 
 每条成功记录保存：
 
@@ -172,6 +171,14 @@ python collector.py --categories papers --journal-stage validated --download --o
 python collector.py --categories papers --journal-stage all --stats-only --out chemistry_dataset/v6_3_papers
 python collector.py --categories papers --journal-stage all --audit-only --out chemistry_dataset/v6_3_papers
 python -m unittest discover -s tests -v
+```
+
+PowerShell 直接检查 JSONL 时请显式指定 UTF-8，避免 Windows PowerShell 5.1
+按系统默认编码读取中文：
+
+```powershell
+Get-Content -Encoding UTF8 chemistry_dataset/v6_3_papers/manifest.jsonl |
+  ForEach-Object { $_ | ConvertFrom-Json }
 ```
 
 ## 主要输出
