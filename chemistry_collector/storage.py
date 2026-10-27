@@ -1,4 +1,4 @@
-"""Manifest, audit CSV and verified file-storage helpers."""
+"""文件与清单管理：多层去重、实际文件校验、原子保存和审计记录。"""
 import csv
 import hashlib
 import json
@@ -9,6 +9,7 @@ from .client import Client, SourceError
 from .constants import COLLECTOR_VERSION, MIME
 from .utils import is_https, normalize_doi, normalized_id, normalized_title, now_utc
 
+# 同时构造 DOI、论文标识、标题及候选链接键，用于下载前去重。
 def identity_keys(item: dict) -> set[str]:
     keys = set()
     doi = normalize_doi(str(item.get("doi") or ""))
@@ -30,6 +31,7 @@ def identity_keys(item: dict) -> set[str]:
     return keys
 
 
+# 只恢复清单中仍有对应本地文件的有效记录，避免虚增统计。
 def load_existing_records(root: Path, *, category: str,
                           permitted_journals: set[str] | None = None) -> list[dict]:
     manifest = root / "manifest.jsonl"
@@ -73,11 +75,12 @@ def file_signature_ok(first_bytes: bytes, ext: str) -> bool:
     return False
 
 
+# 使用临时文件流式下载，经过内容签名和 SHA-256 检查后再保存。
 def download_file(client: Client, item: dict, root: Path, *, url: str,
                   ext: str, max_file_mb: int, seen_sha: set[str]) -> tuple[str, dict | None]:
-    """Stream to .part; verify magic bytes; SHA check before atomic rename.
+    """先流式写入临时文件，验证文件签名与 SHA-256 后再原子重命名。
 
-    Returns downloaded/sha_duplicate and the new record (if downloaded).
+    返回下载状态及成功落盘的记录；重复文件不再保存。
     """
     if not is_https(url):
         raise SourceError(f"Non-HTTPS download: {url}")
@@ -115,9 +118,8 @@ def download_file(client: Client, item: dict, root: Path, *, url: str,
         if digest in seen_sha:
             return "sha_duplicate", None
         if target.exists():
-            # Avoid replacing an unexpected existing file with the same
-            # URL-derived name; allow recovery of a verified orphan file if
-            # the previous run wrote it but crashed before manifest append.
+            # 对已存在的目标文件核验摘要，防止同名覆盖不同内容。
+            # 如果上次中断发生在写入清单前，则允许复用摘要一致的孤立文件。
             existing_digest = hash_file(target)
             if existing_digest != digest:
                 raise SourceError(f"Output filename collision with different file: {target}")
@@ -162,6 +164,7 @@ PAPER_AUDIT_COLUMNS = [
 ]
 
 
+# 将候选论文的筛选结果写入审计表，保留失败原因。
 def paper_audit(path: Path, item: dict, status: str, reason: str = "") -> None:
     append_csv(path, {"at": now_utc(), **item, "filter_status": status,
                       "filter_reason": reason}, PAPER_AUDIT_COLUMNS)

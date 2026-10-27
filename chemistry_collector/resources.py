@@ -1,4 +1,4 @@
-"""MIT OCW, EPA methods and optional textbook collection."""
+"""其他资源采集：处理公开课程视频、教学资料、EPA 方法与教材种子。"""
 import csv
 from pathlib import Path
 from typing import Iterator
@@ -15,6 +15,7 @@ from .models import Journal
 from .storage import download_file, hash_file, load_existing_records
 from .utils import append_jsonl, course_slug, domain_matches, hostname, is_https, log_error
 
+# 从指定的 MIT 开放课程页面提取教学素材候选链接。
 def mit_candidates(client: Client, category: str) -> Iterator[dict]:
     endpoint, suffix = ("lecture-videos", ".mp4") if category == "videos" else ("lecture-notes", ".pdf")
     visited = set()
@@ -52,6 +53,7 @@ def mit_candidates(client: Client, category: str) -> Iterator[dict]:
                 }
 
 
+# 发现可公开获取的实验与标准方法文档。
 def method_candidates(client: Client) -> Iterator[dict]:
     soup = client.html(EPA_INDEX)
     seen_pages = set()
@@ -78,6 +80,7 @@ def method_candidates(client: Client) -> Iterator[dict]:
                 break
 
 
+# 按种子配置构造教材候选记录，避免在代码中硬编码书目。
 def textbook_candidates(csv_path: Path) -> Iterator[dict]:
     if not csv_path.exists():
         print(f"[INFO] Optional textbook seeds absent: {csv_path}")
@@ -95,6 +98,7 @@ def textbook_candidates(csv_path: Path) -> Iterator[dict]:
                    "published_at": row.get("published_at", ""), "doi": ""}
 
 
+# 对论文之外的资源执行统一的发现、去重与下载流程。
 def collect_other(client: Client, args, root: Path, category: str) -> None:
     old = load_existing_records(root, category=category)
     total = len(old)
@@ -138,6 +142,7 @@ def collect_other(client: Client, args, root: Path, category: str) -> None:
             print(f"[SKIP] {category}: {exc}")
 
 
+# 仅检查本地文件与元数据，不发起下载请求。
 def audit_existing(root: Path, categories: list[str], journals: list[Journal]) -> None:
     for category in categories:
         valid = load_existing_records(root, category=category)

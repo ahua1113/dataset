@@ -1,4 +1,4 @@
-"""Runtime journal policy derived from V6.3 feasibility measurements."""
+"""运行时期刊策略：依据可行性测试配置优先级、尝试预算和停用规则。"""
 from dataclasses import dataclass
 import json
 from pathlib import Path
@@ -7,6 +7,7 @@ from .models import Journal
 
 
 @dataclass(frozen=True)
+# 期刊策略保留实测成功率及单刊下载预算，防止低收益期刊反复消耗请求。
 class JournalPolicy:
     enabled: bool = True
     priority: int = 50
@@ -25,6 +26,7 @@ class JournalPolicy:
 DEFAULT_POLICY = JournalPolicy()
 
 
+# 从配置加载默认策略与逐刊覆盖项，校验异常数值。
 def load_journal_policies(path: Path | None) -> dict[str, JournalPolicy]:
     if path is None:
         return {}
@@ -71,6 +73,7 @@ def policy_for(policies: dict[str, JournalPolicy], journal: Journal) -> JournalP
     return policies.get(journal.name, policies.get("__default__", DEFAULT_POLICY))
 
 
+# 将停用期刊与可用期刊分组，再按优先级稳定排序。
 def apply_journal_policies(
     journals: list[Journal],
     policies: dict[str, JournalPolicy],

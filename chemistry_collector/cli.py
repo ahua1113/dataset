@@ -1,4 +1,4 @@
-"""Command-line entry point for the V6.3 collector."""
+"""命令行入口：解析参数、验证运行配置，并分派采集、审计和统计任务。"""
 import argparse
 import os
 from pathlib import Path
@@ -15,6 +15,7 @@ from .resources import audit_existing, collect_other
 from .storage import load_existing_records
 from .utils import log_error
 
+# 首先统一验证参数，再根据运行模式选择离线统计或联网采集。
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--categories", default="papers", help="papers,videos,teaching,methods,textbooks")
@@ -99,7 +100,7 @@ def main() -> None:
     if args.per_page > 100:
         parser.error("OpenAlex --per-page must be <= 100")
     args.out.mkdir(parents=True, exist_ok=True)
-    # Fail early on whitelist problems even before any network traffic.
+    # 在发起网络请求前校验期刊白名单，尽早暴露配置错误。
     journals = load_journals(args.journals_file) if "papers" in cats else []
     if args.stats_only:
         if "papers" not in cats:

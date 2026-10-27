@@ -1,4 +1,4 @@
-"""V6.3 discipline-quota paper collection workflow."""
+"""按化学学科配额采集论文：调度期刊、尝试开放获取副本并持续更新统计。"""
 from pathlib import Path
 
 import requests
@@ -16,8 +16,10 @@ from .reports import select_journals
 from .storage import download_file, identity_keys, load_existing_records, paper_audit
 from .utils import append_jsonl, log_error
 
+# 以学科缺口为停止条件，期刊仅作为论文来源与溯源维度。
 def collect_papers_v6_3(client: Client, args, root: Path) -> None:
-    """Collect by discipline quota; journals are sources, never quota buckets."""
+    """按主学科配额采集论文；期刊仅是来源，不设置平均采集配额。"""
+    # 根据来源阶段和低收益策略筛选实际参与调度的期刊。
     all_journals = load_journals(args.journals_file)
     stage_journals = select_journals(all_journals, args.journal_stage)
     policies = load_journal_policies(getattr(args, "journal_policy_file", None))
@@ -57,6 +59,7 @@ def collect_papers_v6_3(client: Client, args, root: Path) -> None:
         seen_keys.update(identity_keys(record))
         seen_sha.add(str(record.get("sha256") or "").lower())
 
+    # 先根据有效历史记录恢复学科配额，避免重复下载。
     snapshot = quota_snapshot(quota_records, disciplines)
     mode = "metadata_preview" if args.dry_run or not args.download else "pdf_download"
     write_v6_3_reports(
@@ -99,6 +102,7 @@ def collect_papers_v6_3(client: Client, args, root: Path) -> None:
     previewed = 0
     successes = 0
 
+    # 轮询各期刊，保证下载请求受全局次数和单刊预算双重限制。
     while tried < args.max_attempts and not discipline_targets_met(
         snapshot, disciplines, args.min_journals_per_discipline,
         args.max_journal_share, args.max_review_share,
@@ -148,6 +152,7 @@ def collect_papers_v6_3(client: Client, args, root: Path) -> None:
                 paper_audit(excluded_csv, item, "discipline_quota_rejected", reason)
                 continue
 
+            # 合并多个开放获取元数据来源，并按候选位置优先级依次尝试。
             if args.use_unpaywall:
                 item["pdf_locations"] = merge_locations(
                     item.get("pdf_locations") or [],
@@ -200,6 +205,7 @@ def collect_papers_v6_3(client: Client, args, root: Path) -> None:
 
             downloaded = False
             last_error = "No OA fallback location succeeded"
+            # 同一论文最多尝试指定数量的合法公开全文地址。
             for location in item["pdf_locations"][:args.max_pdf_mirrors]:
                 if state["download_attempts"] >= state["max_download_attempts"]:
                     last_error = "journal download-attempt budget exhausted"

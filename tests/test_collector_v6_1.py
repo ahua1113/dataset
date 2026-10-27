@@ -1,3 +1,4 @@
+"""V6.1 期刊配置与采集目标的离线回归测试。"""
 import json
 import io
 from pathlib import Path
@@ -14,6 +15,7 @@ ROOT = Path(__file__).resolve().parents[1]
 JOURNALS = ROOT / "config" / "journals_v6_1.json"
 
 
+# 本测试类集中验证配置与采集规则的兼容性，避免依赖在线服务。
 class CollectorV61Tests(unittest.TestCase):
     def test_whitelist_has_twenty_unique_valid_journals(self):
         journals = collector.load_journals(JOURNALS)

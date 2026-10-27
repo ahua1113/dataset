@@ -1,4 +1,4 @@
-"""Per-journal OA feasibility runner kept for V6/V6.1/V6.2 compatibility."""
+"""逐期刊开放获取可行性测试流程，兼容早期按期刊计数的运行方式。"""
 from pathlib import Path
 from typing import Iterator
 
@@ -19,6 +19,7 @@ from .storage import (
 )
 from .utils import append_jsonl, log_error
 
+# 可行性测试以每刊目标篇数为准，与正式的按学科配额模式分离。
 def collect_papers(client: Client, args, root: Path) -> None:
     stage_journals = select_journals(
         load_journals(args.journals_file), getattr(args, "journal_stage", "all")
@@ -66,6 +67,7 @@ def collect_papers(client: Client, args, root: Path) -> None:
     version_suffix = COLLECTOR_VERSION.replace(".", "_")
     candidates_csv = root / f"papers_v{version_suffix}_candidates.csv"
     excluded_csv = root / f"papers_v{version_suffix}_filtered_out.csv"
+    # 兼容未启用学科分类及预印本兜底的旧版测试调用。
     def legacy_iterator(journal: Journal) -> Iterator[dict]:
         if disciplines is None and not getattr(args, "allow_preprint_fallback", False):
             return journal_article_iterator(
@@ -90,6 +92,7 @@ def collect_papers(client: Client, args, root: Path) -> None:
     tried = 0
     previewed = 0
 
+    # 模拟预览和真实下载采用不同的期刊达标判断口径。
     def all_targets_met() -> bool:
         if args.dry_run or not args.download:
             return all(state["previewed"] >= per_journal_target for state in states)
@@ -189,7 +192,7 @@ def collect_papers(client: Client, args, root: Path) -> None:
                         max_file_mb=args.max_file_mb, seen_sha=seen_sha)
                     if state_str == "sha_duplicate":
                         paper_audit(excluded_csv, record_item, "duplicate_sha256", "Identical PDF bytes already saved")
-                        downloaded = True  # duplicate work; do not try further locations
+                        downloaded = True  # 已是重复论文，无需继续尝试其他下载位置
                         break
                     assert record is not None
                     append_jsonl(root / "manifest.jsonl", record)

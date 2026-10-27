@@ -1,3 +1,4 @@
+"""V6.2 期刊扩展配置及数据校验的离线回归测试。"""
 import json
 from pathlib import Path
 import tempfile
@@ -11,6 +12,7 @@ JOURNALS = ROOT / "config" / "journals_v6_2.json"
 PREVIOUS = ROOT / "config" / "journals_v6_1.json"
 
 
+# 本测试类集中验证配置与采集规则的兼容性，避免依赖在线服务。
 class CollectorV62JournalExpansionTests(unittest.TestCase):
     def test_whitelist_has_thirty_four_unique_valid_journals(self):
         journals = collector.load_journals(JOURNALS)

@@ -1,3 +1,5 @@
+"""视频资源采集启动脚本：调用统一入口处理公开视频。"""
+
 from pathlib import Path
 import subprocess
 import sys

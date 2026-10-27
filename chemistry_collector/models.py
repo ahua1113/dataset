@@ -1,4 +1,4 @@
-"""Validated configuration models."""
+"""期刊配置模型：加载基础及扩展白名单，并校验期刊标识和采集状态。"""
 from dataclasses import dataclass
 import json
 from pathlib import Path
@@ -9,6 +9,7 @@ from .utils import is_https
 
 
 @dataclass(frozen=True)
+# 期刊元数据集中建模，候选期刊和已验证期刊共用同一结构。
 class Journal:
     name: str
     issn: str
@@ -21,6 +22,7 @@ class Journal:
     feasibility_target: int = 0
 
 
+# 加载可继承的期刊列表，并检查总数、重复项及必要字段。
 def load_journals(path: Path) -> list[Journal]:
     if not path.is_file():
         raise FileNotFoundError(f"Journal whitelist missing: {path}")

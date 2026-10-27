@@ -1,3 +1,5 @@
+"""教材资源采集启动脚本：使用教材种子配置运行对应采集流程。"""
+
 from pathlib import Path
 import subprocess
 import sys
