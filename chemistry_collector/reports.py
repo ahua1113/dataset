@@ -88,6 +88,7 @@ def save_feasibility_report(root: Path, states: list[dict], counts: dict[str, in
             "mode": "metadata_preview" if dry_run else "pdf_download",
             "eligible_candidates": state["previewed"] if dry_run else state["tried"],
             "download_attempts": state["download_attempts"] if not dry_run else 0,
+            "circuit_skips": state.get("circuit_skips", 0) if not dry_run else 0,
             "new_downloads": state["success"],
             "valid_local_pdfs": counts[journal.name],
             "target": per_journal_target,

@@ -64,13 +64,12 @@ chemistry_collector/
 论文身份必须由白名单期刊的 ISSN 与 OpenAlex Source ID 确认；PDF可以来自其他合法公开位置。程序聚合 OpenAlex locations 与 Unpaywall，按以下顺序尝试：
 
 1. 出版社公开PDF；
-2. 与该DOI关联的 arXiv 公开版本；
-3. 与该DOI关联的 ChemRxiv 公开版本；
-4. PubMed Central / Europe PMC；
-5. 机构知识库；
-6. 其他可验证OA仓储。
+2. 与该DOI关联的 arXiv / ChemRxiv / bioRxiv / medRxiv / Research Square 公开预印本；
+3. PubMed Central / Europe PMC；
+4. 机构知识库；
+5. 其他可验证OA仓储。
 
-预印本只作为目标期刊论文的公开副本，不会把任意 arXiv/ChemRxiv 记录当成期刊论文。可用 `--no-allow-preprint-fallback` 禁止预印本兜底。
+预印本只作为目标期刊论文的公开副本，不会把任意预印本记录当成期刊论文。可用 `--no-allow-preprint-fallback` 统一禁止上述所有预印本平台兜底；其版本固定记录为 `submittedVersion`，避免被上游元数据误标为接受稿。
 
 每条成功记录保存：
 
@@ -172,6 +171,14 @@ python collector.py --categories papers --journal-stage validated --download --o
 python collector.py --categories papers --journal-stage all --stats-only --out chemistry_dataset/v6_3_papers
 python collector.py --categories papers --journal-stage all --audit-only --out chemistry_dataset/v6_3_papers
 python -m unittest discover -s tests -v
+```
+
+PowerShell 直接检查 JSONL 时请显式指定 UTF-8，避免 Windows PowerShell 5.1
+按系统默认编码读取中文：
+
+```powershell
+Get-Content -Encoding UTF8 chemistry_dataset/v6_3_papers/manifest.jsonl |
+  ForEach-Object { $_ | ConvertFrom-Json }
 ```
 
 ## 主要输出
