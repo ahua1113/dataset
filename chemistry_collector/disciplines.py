@@ -1,4 +1,4 @@
-"""Pure V6.3 helpers: discipline classification, OA-source ranking and reports."""
+"""学科分类、开放获取来源排序、配额判定与统计报告的纯逻辑模块。"""
 from __future__ import annotations
 
 from collections import Counter, defaultdict
@@ -108,9 +108,10 @@ def _contains(text: str, phrase: str) -> bool:
     return phrase in text
 
 
+# 依据标题、主题、摘要和期刊分组评分，选取唯一主学科。
 def classify_work(work: dict, journal_group: str,
                   disciplines: list[Discipline]) -> dict:
-    """Assign exactly one primary discipline; secondary labels never count quotas."""
+    """为每篇论文分配唯一主学科，次学科不参与配额计数。"""
     title = " ".join(str(work.get("title") or "").split()).casefold()
     abstract = reconstruct_abstract(work.get("abstract_inverted_index")).casefold()
     topics = _topic_text(work).casefold()
@@ -179,6 +180,7 @@ OPEN_LICENSE_ALIASES = {
 }
 
 
+# 仅在许可证标识可以识别时归一化，未知许可保留待核验状态。
 def normalize_license(value: str) -> tuple[str, str]:
     raw = (value or "").strip()
     folded = raw.casefold().replace("_", "-")
@@ -223,6 +225,7 @@ SOURCE_PRIORITY = {
 }
 
 
+# 从元数据提供的多个位置筛选符合条件的全文下载链接。
 def openalex_locations(work: dict, publisher_hosts: tuple[str, ...],
                        source_id: str, allow_preprints: bool = True) -> list[dict]:
     locations = [work.get("primary_location"), work.get("best_oa_location")]
@@ -340,6 +343,7 @@ def _record_key(record: dict) -> str:
     return "sha:" + sha
 
 
+# 以唯一论文为单位汇总各主学科的数量、期刊分布与综述数量。
 def quota_snapshot(records: list[dict], disciplines: list[Discipline]) -> dict:
     discipline_ids = {discipline.id for discipline in disciplines}
     counts = Counter()
@@ -361,6 +365,7 @@ def quota_snapshot(records: list[dict], disciplines: list[Discipline]) -> dict:
     return {"counts": counts, "reviews": reviews, "journals": journals}
 
 
+# 下载前检查学科目标、期刊集中度与综述占比等约束。
 def quota_decision(item: dict, snapshot: dict, discipline_map: dict[str, Discipline],
                    max_journal_share: float, max_review_share: float,
                    min_journals: int = 1) -> tuple[bool, str]:
@@ -417,6 +422,7 @@ def all_targets_met(snapshot: dict, disciplines: list[Discipline],
     return True
 
 
+# 汇总学科覆盖和来源统计，并写出供审计使用的报告。
 def write_reports(root: Path, records: list[dict], disciplines: list[Discipline],
                   min_journals: int, max_journal_share: float,
                   max_review_share: float, mode: str) -> dict:

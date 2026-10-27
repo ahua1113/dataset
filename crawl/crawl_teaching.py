@@ -1,3 +1,5 @@
+"""教学资源采集启动脚本：调用统一入口处理教学材料。"""
+
 from pathlib import Path
 import subprocess
 import sys

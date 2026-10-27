@@ -1,3 +1,4 @@
+"""V6.3 项目结构、期刊策略与入口脚本的离线回归测试。"""
 import json
 from pathlib import Path
 import tempfile
@@ -17,6 +18,7 @@ JOURNALS = ROOT / "config" / "journals_v6_3.json"
 POLICY = ROOT / "config" / "journal_policy_v6_3.json"
 
 
+# 本测试类集中验证配置与采集规则的兼容性，避免依赖在线服务。
 class CollectorV63StructureAndPolicyTests(unittest.TestCase):
     def setUp(self):
         self.journals = collector.load_journals(JOURNALS)

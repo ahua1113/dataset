@@ -1,4 +1,4 @@
-"""Paper discovery, OA-location resolution and metadata filtering."""
+"""期刊论文发现模块：校验期刊身份，筛选论文并解析合法开放获取位置。"""
 import re
 from pathlib import Path
 from typing import Iterator
@@ -13,6 +13,7 @@ from .disciplines import (
 from .models import Journal
 from .utils import is_https, log_error, normalize_doi, normalized_id
 
+# 先用 ISSN 校验 OpenAlex 来源标识，防止名称相似的期刊混入。
 def resolve_openalex_source(client: Client, journal: Journal) -> str:
     data = client.json(f"{OPENALEX_SOURCES}/issn:{journal.issn}")
     issn_set = set(data.get("issn") or [])
@@ -28,10 +29,9 @@ def resolve_openalex_source(client: Client, journal: Journal) -> str:
 
 def candidate_pdf_locations(work: dict, journal: Journal, source_id: str,
                             allow_preprints: bool = False) -> list[dict]:
-    """Publisher OA PDF first; repository accepted/published copy as fallback.
+    """优先使用出版社的开放获取全文；机构库接受稿或正式版本可作为后备。
 
-    A preprint-hosted PDF is *not* a journal-published PDF. Exclude known
-    preprint servers even if OpenAlex links that version to the journal work.
+    预印本不等同于期刊正式发表版本，是否允许使用由调用参数控制。
     """
     return openalex_locations(
         work, journal.publisher_hosts, source_id, allow_preprints=allow_preprints
@@ -40,7 +40,7 @@ def candidate_pdf_locations(work: dict, journal: Journal, source_id: str,
 
 def unpaywall_pdf_locations(client: Client, doi: str, journal: Journal,
                             allow_preprints: bool = True) -> list[dict]:
-    """Resolve extra legal OA copies. Unpaywall requires a contact email."""
+    """通过 Unpaywall 补充合法开放获取副本；查询时需要提供联系邮箱。"""
     if not client.contact or "@" not in client.contact:
         return []
     url = f"{UNPAYWALL_API}/{doi}?" + urlencode({"email": client.contact})
@@ -56,6 +56,7 @@ def unpaywall_pdf_locations(client: Client, doi: str, journal: Journal,
     )
 
 
+# 对论文类型、开放获取状态、DOI 和主发表期刊进行统一校验。
 def article_candidate(work: dict, journal: Journal, source_id: str,
                       disciplines: list[Discipline] | None = None,
                       allow_preprints: bool = False) -> tuple[dict | None, str]:
@@ -114,6 +115,7 @@ def article_candidate(work: dict, journal: Journal, source_id: str,
     }, "accepted"
 
 
+# 按页检索期刊论文，并逐条返回通过条件筛选的候选记录。
 def journal_article_iterator(client: Client, journal: Journal, per_page: int, pages: int,
                              error_path: Path, disciplines: list[Discipline] | None = None,
                              allow_preprints: bool = False) -> Iterator[dict]:

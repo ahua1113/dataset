@@ -1,4 +1,4 @@
-"""Run the current V6.3 discipline-quota paper collector."""
+"""论文采集启动脚本：使用 V6.3 配置运行按学科配额的正式采集流程。"""
 from pathlib import Path
 import subprocess
 import sys
@@ -7,6 +7,7 @@ import sys
 ROOT = Path(__file__).resolve().parents[1]
 
 
+# 统一指定期刊配置、学科规则和独立输出目录，避免混用旧版本数据。
 def main() -> None:
     command = [
         sys.executable,

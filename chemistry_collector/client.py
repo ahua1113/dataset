@@ -1,4 +1,4 @@
-"""HTTP client with polite rate limiting and no authentication bypass."""
+"""网络请求客户端：控制访问频率、遵守站点规则，并处理域名级访问熔断。"""
 import re
 import time
 from urllib.parse import urlparse
@@ -14,6 +14,7 @@ class SourceError(RuntimeError):
     pass
 
 
+# 请求客户端不处理登录认证；连续访问失败的域名会暂时停止下载请求。
 class Client:
     """No login, session cookies, paywall workaround or other auth workflow."""
 
@@ -40,6 +41,7 @@ class Client:
         self.domain_failures: dict[str, int] = {}
         self.circuit_open_hosts: set[str] = set()
 
+    # 累计受限请求次数，到达阈值后打开该域名的熔断开关。
     def record_access_failure(self, host: str) -> None:
         if not host:
             return
@@ -59,6 +61,7 @@ class Client:
             time.sleep(gap - delta)
         self.last_request[host] = time.monotonic()
 
+    # 先检查站点抓取规则，再决定是否访问实际资源。
     def allowed(self, url: str) -> bool:
         if not self.respect_robots:
             return True
@@ -81,6 +84,7 @@ class Client:
                 raise SourceError(f"Cannot verify robots.txt for {origin}: {exc}") from exc
         return self.robot_parsers[origin].can_fetch(self.session.headers["User-Agent"], url)
 
+    # 统一检查 HTTPS、站点限制、响应状态和登录跳转。
     def get(self, url: str, *, api: bool = False, stream: bool = False):
         if not is_https(url):
             raise SourceError("Only HTTPS links are allowed")
@@ -117,7 +121,7 @@ class Client:
                             "or use --openalex-api-key")
                 raise SourceError(f"HTTP 429: {key_hint}")
             raise SourceError(f"HTTP {status} for {url}")
-        # Publishers can redirect an OA URL to a login / access wall.
+        # 出版社可能将公开全文链接重定向到登录页，遇到这种情况直接拒绝。
         if not api and re.search(r"/(?:login|signin|authenticate)(?:[/?]|$)", urlparse(response.url).path, re.I):
             response.close()
             self.record_access_failure(host)

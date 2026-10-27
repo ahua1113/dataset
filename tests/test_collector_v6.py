@@ -1,4 +1,4 @@
-"""Offline checks: no external HTTP calls and no real papers downloaded."""
+"""V6 版本的离线回归测试：使用模拟请求，不下载真实论文。"""
 import json
 import sys
 import tempfile
@@ -57,7 +57,7 @@ class FakeOpenAlexClient(FakeDownloader):
         if int(params["page"][0]) > 1:
             return {"results": []}
         journal = self.id_to_journal[source_id]
-        # Only one research article in two journals for the integration test.
+        # 集成测试只让两本期刊各返回一篇研究论文。
         if journal.name not in {"Nature Chemistry", "ACS Central Science"}:
             return {"results": []}
         suffix = "natchem" if journal.name == "Nature Chemistry" else "acs"
@@ -80,6 +80,7 @@ class FakeOpenAlexClient(FakeDownloader):
         }]}
 
 
+# 本测试类集中验证配置与采集规则的兼容性，避免依赖在线服务。
 class CollectorV6Tests(unittest.TestCase):
     def setUp(self):
         self.journals = c.load_journals(ROOT / "config/journals_v6.json")
@@ -157,7 +158,7 @@ class CollectorV6Tests(unittest.TestCase):
                 max_pdf_mirrors=2, per_page=50, max_pages_per_journal=1, max_attempts=100)
             c.collect_papers(FakeOpenAlexClient(pdf), args, root)
             rows = [json.loads(line) for line in (root / "manifest.jsonl").read_text().splitlines()]
-            # Two DOIs, but identical PDF bytes; only one stored.
+            # 两个不同 DOI 对应相同 PDF 内容，最终只应保存一份。
             self.assertEqual(len(rows), 1)
             self.assertEqual(rows[0]["status"], "downloaded")
             self.assertEqual(rows[0]["oa_pdf_source"], "institutional_repository")

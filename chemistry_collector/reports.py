@@ -1,4 +1,4 @@
-"""Journal feasibility and local-file reports."""
+"""生成期刊可行性、有效本地论文数量及来源测试统计报告。"""
 import csv
 import json
 from pathlib import Path
@@ -8,9 +8,10 @@ from .models import Journal
 from .storage import load_existing_records
 from .utils import now_utc
 
+# 根据已落盘且去重的有效文件重建每刊统计，不使用推测数量。
 def save_journal_stats(root: Path, journals: list[Journal], records: list[dict],
                        per_journal_target: int = 20) -> dict[str, int]:
-    """Rebuild per-journal counts from downloaded manifest files; deduplicate by SHA-256."""
+    """从已下载清单重建每刊数量，并使用 SHA-256 消除重复文件。"""
     counts = {journal.name: 0 for journal in journals}
     seen_sha: set[str] = set()
     for record in records:
@@ -64,16 +65,17 @@ def save_journal_stats(root: Path, journals: list[Journal], records: list[dict],
 
 def refresh_journal_stats(root: Path, journals: list[Journal],
                           per_journal_target: int = 20) -> dict[str, int]:
-    """Rebuild from manifest and real files, without network requests."""
+    """仅根据清单及本地实际文件更新统计，不执行网络请求。"""
     allowed = {j.name for j in journals}
     records = [r for r in load_existing_records(root, category="papers")
                if r.get("journal") in allowed]
     return save_journal_stats(root, journals, records, per_journal_target)
 
 
+# 记录每刊候选、下载尝试和目标完成情况，便于横向比较。
 def save_feasibility_report(root: Path, states: list[dict], counts: dict[str, int],
                             per_journal_target: int, dry_run: bool) -> None:
-    """Persist a per-journal source test; never infer success from a global total."""
+    """保存逐期刊可行性测试结果，不使用全局总数推算单刊成功量。"""
     rows = []
     for state in states:
         journal = state["journal"]
@@ -129,6 +131,7 @@ def print_journal_stats(counts: dict[str, int]) -> None:
     print(f"  TOTAL: {sum(counts.values())}", flush=True)
 
 
+# 按照已验证、候选或全部三个阶段选择期刊。
 def select_journals(journals: list[Journal], stage: str) -> list[Journal]:
     if stage == "all":
         return journals

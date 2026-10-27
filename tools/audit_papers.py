@@ -1,7 +1,4 @@
-"""PyCharm 右键运行此文件：纯离线审计已下载的化学物理论文。
-不会访问 arXiv API，不下载/删除/修改 PDF，不改动原 manifest.jsonl。
-请确保早期原始采集确实使用 cat:physics.chem-ph 这一条件。
-"""
+"""本地论文审计工具：在不联网的情况下检查论文文件与元数据。"""
 import subprocess
 import sys
 from pathlib import Path
