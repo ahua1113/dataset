@@ -23,7 +23,7 @@ env/
 # =========================
 # Generated datasets and runtime reports
 # =========================
-chemistry_dataset/
+# chemistry_dataset/
 
 # Local paper-level inventories may contain DOI, paths and hashes
 analysis/**/papers_inventory.csv
