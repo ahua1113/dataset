@@ -79,8 +79,8 @@ python tools/consolidate_papers.py --consolidate --cleanup-sources --yes
 
 ```powershell
 python -m pip install -r requirements.txt
-$env:OPENALEX_API_KEY="你的 OpenAlex API Key"
-$env:COLLECTOR_CONTACT_EMAIL="你的联系邮箱"
+$env:OPENALEX_API_KEY="OpenAlex API Key"
+$env:COLLECTOR_CONTACT_EMAIL="联系邮箱"
 python collector.py --categories papers --journal-stage all --download
 ```
 
@@ -91,8 +91,8 @@ python collector.py --categories papers --journal-stage all --download
 前台验证：
 
 ```bash
-export OPENALEX_API_KEY='你的 OpenAlex API Key'
-export COLLECTOR_CONTACT_EMAIL='你的联系邮箱'
+export OPENALEX_API_KEY='OpenAlex API Key'
+export COLLECTOR_CONTACT_EMAIL='联系邮箱'
 python crawl/crawl_papers.py
 ```
 
