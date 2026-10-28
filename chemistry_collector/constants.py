@@ -4,10 +4,10 @@ import re
 
 ROOT = Path(__file__).resolve().parents[1]
 # 版本与请求地址集中维护，避免多个模块重复定义。
-COLLECTOR_VERSION = "6.3"
+COLLECTOR_VERSION = "6.4"
 WHITELIST_SIZE = 42
 CONFIG_WHITELIST_SIZES = {
-    "journals_v6_3.json": 42,
+    "journals_v6_4.json": 42,
 }
 OPENALEX_SOURCES = "https://api.openalex.org/sources"
 OPENALEX_WORKS = "https://api.openalex.org/works"

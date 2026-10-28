@@ -1,4 +1,4 @@
-"""V6.3 本地文件校验、去重与白名单边界测试。"""
+"""V6.4 本地文件校验、去重与白名单边界测试。"""
 from pathlib import Path
 import tempfile
 import unittest
@@ -14,7 +14,7 @@ from chemistry_collector.utils import append_jsonl
 
 
 ROOT = Path(__file__).resolve().parents[1]
-JOURNALS = ROOT / "config" / "journals_v6_3.json"
+JOURNALS = ROOT / "config" / "journals_v6_4.json"
 
 
 class FakeResponse:
@@ -97,6 +97,26 @@ class StorageTests(unittest.TestCase):
                 load_existing_records(
                     root, category="papers", permitted_journals=allowed
                 )
+
+    def test_incomplete_last_manifest_line_is_ignored_after_interruption(self):
+        pdf = b"%PDF-1.7" + b"x" * 2048
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            path = root / "raw" / "papers" / "saved.pdf"
+            path.parent.mkdir(parents=True)
+            path.write_bytes(pdf)
+            append_jsonl(root / "manifest.jsonl", {
+                "category": "papers",
+                "status": "downloaded",
+                "journal": "Journal A",
+                "file": "raw/papers/saved.pdf",
+                "bytes": len(pdf),
+                "sha256": hash_file(path),
+            })
+            with (root / "manifest.jsonl").open("a", encoding="utf-8") as stream:
+                stream.write('{"category":"papers"')
+            records = load_existing_records(root, category="papers")
+            self.assertEqual(1, len(records))
 
 
 if __name__ == "__main__":

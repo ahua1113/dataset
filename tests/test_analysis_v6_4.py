@@ -17,15 +17,33 @@ from chemistry_collector.disciplines import load_disciplines
 
 
 ROOT = Path(__file__).resolve().parents[1]
-DISCIPLINES = ROOT / "config" / "disciplines_v6_3.json"
+DISCIPLINES = ROOT / "config" / "disciplines_v6_4.json"
 
 
 class AnalysisTests(unittest.TestCase):
+    def test_stronger_v64_title_evidence_repairs_stale_classification(self):
+        records = classify_missing_disciplines([{
+            "title": "Computational Design of Nanoscale Auxetic DNA Metastructures",
+            "journal_group": "综合化学",
+            "primary_discipline": "biological_medicinal",
+            "primary_discipline_name": "生物与药物化学",
+            "discipline_score": 3,
+            "discipline_classifier": "v6.3_weighted_keywords",
+        }], load_disciplines(DISCIPLINES))
+        self.assertEqual("materials_nanochemistry", records[0]["primary_discipline"])
+        self.assertEqual(
+            "reclassified_stale_classifier",
+            records[0]["analysis_discipline_origin"],
+        )
+        self.assertEqual(
+            "biological_medicinal", records[0]["previous_primary_discipline"]
+        )
+
     def test_multiple_paper_roots_are_deduplicated_consolidated_and_analyzed(self):
         with tempfile.TemporaryDirectory() as tmp:
             dataset_root = Path(tmp) / "chemistry_dataset"
             first = dataset_root / "papers_dataset"
-            second = dataset_root / "v6_3_smoke"
+            second = dataset_root / "legacy_smoke"
             canonical = dataset_root / "papers"
             analysis_dir = dataset_root / "quantitative_analysis"
             first_pdf = first / "raw" / "papers" / "first.pdf"
@@ -75,41 +93,46 @@ class AnalysisTests(unittest.TestCase):
             self.assertEqual(1, duplicates)
             self.assertTrue(any("orphan PDF" in warning for warning in warnings))
 
-            records, result = consolidate_entries(unique, canonical)
+            disciplines = load_disciplines(DISCIPLINES)
+            records, result = consolidate_entries(
+                unique, canonical, disciplines=disciplines
+            )
             self.assertEqual(2, result["copied"])
             self.assertEqual(1, result["missing"])
             self.assertEqual(2, len(list((canonical / "raw" / "papers").glob("*.pdf"))))
             self.assertEqual(3, len((canonical / "manifest.jsonl").read_text(
                 encoding="utf-8").splitlines()))
-
-            classified = classify_missing_disciplines(
-                records, load_disciplines(DISCIPLINES)
+            self.assertIn(
+                canonical.resolve(),
+                discover_paper_roots(dataset_root, canonical),
             )
+
+            manifest_records = [json.loads(line) for line in (
+                canonical / "manifest.jsonl"
+            ).read_text(encoding="utf-8").splitlines()]
+            self.assertTrue(manifest_records[0].get("primary_discipline"))
+            classified = classify_missing_disciplines(records, disciplines)
             summary = write_quantitative_analysis(
                 classified, analysis_dir, source_roots=roots,
                 duplicate_records=duplicates, warnings=warnings,
+                disciplines=load_disciplines(DISCIPLINES),
             )
             self.assertEqual(3, summary["unique_papers"])
             self.assertEqual(1, summary["duplicate_records_removed"])
             self.assertEqual(2, summary["local_pdf_verified"])
-            self.assertIn(
-                "2025", (analysis_dir / "by_publication_year.csv").read_text(
-                    encoding="utf-8-sig"
-                )
+            quantitative = (analysis_dir / "quantitative_report.csv").read_text(
+                encoding="utf-8-sig"
             )
-            self.assertIn(
-                "2025-01", (analysis_dir / "by_publication_month.csv").read_text(
-                    encoding="utf-8-sig"
-                )
-            )
+            self.assertIn("publication_year,publication_year,2025", quantitative)
+            self.assertIn("publication_month,publication_month,2025-01", quantitative)
+            self.assertIn("journal,journal,Journal A", quantitative)
+            self.assertIn("discipline,materials_nanochemistry,材料与纳米化学", quantitative)
             for filename in (
-                "quantitative_summary.json", "by_journal.csv",
-                "by_discipline.csv", "by_publication_year.csv",
-                "by_discipline_origin.csv", "by_file_size_bucket.csv",
-                "discipline_journal_matrix.csv", "discipline_year_matrix.csv",
-                "data_quality.csv", "papers_inventory.csv", "README.md",
+                "quantitative_summary.json", "quantitative_report.csv",
+                "papers_inventory.csv", "README.md",
             ):
                 self.assertTrue((analysis_dir / filename).is_file(), filename)
+            self.assertFalse((analysis_dir / "by_journal.csv").exists())
 
 
 if __name__ == "__main__":

@@ -38,12 +38,20 @@ def load_existing_records(root: Path, *, category: str,
     if not manifest.is_file():
         return []
     records = []
-    for line_num, raw in enumerate(manifest.read_text(encoding="utf-8").splitlines(), 1):
+    manifest_text = manifest.read_text(encoding="utf-8")
+    manifest_lines = manifest_text.splitlines()
+    for line_num, raw in enumerate(manifest_lines, 1):
         if not raw.strip():
             continue
         try:
             row = json.loads(raw)
         except ValueError as exc:
+            if line_num == len(manifest_lines) and not manifest_text.endswith("\n"):
+                print(
+                    f"[WARN] 忽略上次异常中断留下的不完整 manifest 尾行：{line_num}",
+                    flush=True,
+                )
+                continue
             raise RuntimeError(f"Bad manifest JSON on line {line_num}: {exc}") from exc
         if row.get("category") != category or row.get("status") != "downloaded":
             continue

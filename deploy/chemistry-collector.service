@@ -1,0 +1,21 @@
+[Unit]
+Description=化学 OA 论文采集器 V6.4
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=collector
+WorkingDirectory=/opt/chemistry-source-collector
+EnvironmentFile=-/etc/chemistry-collector.env
+ExecStart=/opt/chemistry-source-collector/.venv/bin/python crawl/crawl_papers.py
+Restart=on-failure
+RestartSec=60
+TimeoutStopSec=90
+KillSignal=SIGTERM
+NoNewPrivileges=true
+PrivateTmp=true
+UMask=0027
+
+[Install]
+WantedBy=multi-user.target
