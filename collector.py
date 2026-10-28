@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""V6.3 开放获取采集器的兼容入口。
+"""V6.4 开放获取采集器的稳定入口。
 
 核心实现已迁移到 chemistry_collector 包，保留旧脚本的命令及导入接口。"""
 from chemistry_collector import *  # noqa: F401,F403

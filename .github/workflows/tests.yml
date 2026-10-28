@@ -1,4 +1,4 @@
-name: V6.3 offline tests
+name: V6.4 offline tests
 
 on:
   push:

@@ -1,13 +1,13 @@
-"""论文采集启动脚本：使用 V6.3 配置运行按学科配额的正式采集流程。"""
+"""论文采集启动脚本：以 V6.4 连续模式运行全学科 OA 采集。"""
 from pathlib import Path
-import subprocess
+import os
 import sys
 
 
 ROOT = Path(__file__).resolve().parents[1]
 
 
-# 统一指定期刊配置、学科规则和独立输出目录，避免混用旧版本数据。
+# 统一使用合并后的论文目录；程序自动计入已有论文并更新量化报告。
 def main() -> None:
     command = [
         sys.executable,
@@ -15,12 +15,15 @@ def main() -> None:
         "--categories", "papers",
         "--journal-stage", "all",
         "--download",
-        "--journals-file", str(ROOT / "config" / "journals_v6_3.json"),
-        "--disciplines-file", str(ROOT / "config" / "disciplines_v6_3.json"),
-        "--journal-policy-file", str(ROOT / "config" / "journal_policy_v6_3.json"),
-        "--out", str(ROOT / "chemistry_dataset" / "v6_3_papers"),
+        "--continuous",
+        "--journals-file", str(ROOT / "config" / "journals_v6_4.json"),
+        "--disciplines-file", str(ROOT / "config" / "disciplines_v6_4.json"),
+        "--journal-policy-file", str(ROOT / "config" / "journal_policy_v6_4.json"),
+        "--out", str(ROOT / "chemistry_dataset" / "papers"),
+        "--analysis-dir", str(ROOT / "chemistry_dataset" / "quantitative_analysis"),
     ]
-    subprocess.run(command, cwd=ROOT, check=True)
+    os.chdir(ROOT)
+    os.execv(sys.executable, command)
 
 
 if __name__ == "__main__":

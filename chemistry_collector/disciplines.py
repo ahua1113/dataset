@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 from collections import Counter, defaultdict
-import csv
 from dataclasses import dataclass
 from datetime import datetime, timezone
 import json
@@ -146,7 +145,7 @@ def classify_work(work: dict, journal_group: str,
             "secondary_disciplines": [],
             "discipline_score": 0,
             "discipline_evidence": [],
-            "discipline_classifier": "v6.3_weighted_keywords",
+            "discipline_classifier": "v6.4_weighted_keywords",
         }
     secondary_threshold = max(2, math.ceil(best_score * 0.35))
     secondary = [row[2].id for row in scored[1:]
@@ -157,7 +156,7 @@ def classify_work(work: dict, journal_group: str,
         "secondary_disciplines": secondary,
         "discipline_score": best_score,
         "discipline_evidence": best_evidence[:12],
-        "discipline_classifier": "v6.3_weighted_keywords",
+        "discipline_classifier": "v6.4_weighted_keywords",
     }
 
 
@@ -449,7 +448,6 @@ def write_reports(root: Path, records: list[dict], disciplines: list[Discipline]
                   max_review_share: float, mode: str) -> dict:
     root.mkdir(parents=True, exist_ok=True)
     snapshot = quota_snapshot(records, disciplines)
-    journal_names = sorted({str(record.get("journal") or "UNKNOWN") for record in records})
     rows: list[dict] = []
     for discipline in disciplines:
         count = snapshot["counts"][discipline.id]
@@ -481,7 +479,7 @@ def write_reports(root: Path, records: list[dict], disciplines: list[Discipline]
             "target_met": target_met,
         })
     report = {
-        "version": "V6.3",
+        "version": "V6.4",
         "updated_at": _now_utc(),
         "mode": mode,
         "counting_rule": "one primary discipline per unique DOI/OpenAlex work; secondary disciplines do not count",
@@ -491,63 +489,9 @@ def write_reports(root: Path, records: list[dict], disciplines: list[Discipline]
         "total_counted_papers": sum(row["count"] for row in rows),
         "disciplines": rows,
     }
-    json_path = root / "discipline_stats_v6_3.json"
+    json_path = root / "discipline_stats_v6_4.json"
     json_tmp = json_path.with_suffix(".json.tmp")
     json_tmp.write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     json_tmp.replace(json_path)
 
-    csv_path = root / "discipline_stats_v6_3.csv"
-    csv_tmp = csv_path.with_suffix(".csv.tmp")
-    with csv_tmp.open("w", encoding="utf-8-sig", newline="") as file:
-        writer = csv.DictWriter(file, fieldnames=list(rows[0]))
-        writer.writeheader()
-        writer.writerows(rows)
-    csv_tmp.replace(csv_path)
-
-    matrix_path = root / "discipline_journal_matrix_v6_3.csv"
-    matrix_tmp = matrix_path.with_suffix(".csv.tmp")
-    with matrix_tmp.open("w", encoding="utf-8-sig", newline="") as file:
-        fields = ["discipline_id", "discipline"] + journal_names + ["total"]
-        writer = csv.DictWriter(file, fieldnames=fields)
-        writer.writeheader()
-        for discipline in disciplines:
-            values = snapshot["journals"][discipline.id]
-            writer.writerow({
-                "discipline_id": discipline.id,
-                "discipline": discipline.name,
-                **{journal: values[journal] for journal in journal_names},
-                "total": snapshot["counts"][discipline.id],
-            })
-    matrix_tmp.replace(matrix_path)
-
-    source_counter = Counter(
-        (str(record.get("oa_pdf_source") or "unknown"),
-         str(record.get("oa_metadata_provider") or "unknown"),
-         str(record.get("license_verification") or "unknown"))
-        for record in records
-    )
-    source_rows = [{
-        "source_type": key[0],
-        "metadata_provider": key[1],
-        "license_verification": key[2],
-        "count": value,
-    } for key, value in sorted(source_counter.items())]
-    source_report = {
-        "version": "V6.3",
-        "updated_at": _now_utc(),
-        "total_records": len(records),
-        "sources": source_rows,
-    }
-    source_path = root / "source_fallback_stats_v6_3.json"
-    source_tmp = source_path.with_suffix(".json.tmp")
-    source_tmp.write_text(json.dumps(source_report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-    source_tmp.replace(source_path)
-    source_csv = root / "source_fallback_stats_v6_3.csv"
-    source_csv_tmp = source_csv.with_suffix(".csv.tmp")
-    with source_csv_tmp.open("w", encoding="utf-8-sig", newline="") as file:
-        fields = ["source_type", "metadata_provider", "license_verification", "count"]
-        writer = csv.DictWriter(file, fieldnames=fields)
-        writer.writeheader()
-        writer.writerows(source_rows)
-    source_csv_tmp.replace(source_csv)
     return report

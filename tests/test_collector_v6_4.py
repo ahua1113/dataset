@@ -1,4 +1,4 @@
-"""V6.3 项目结构、期刊策略与入口脚本的离线回归测试。"""
+"""V6.4 项目结构、期刊策略与服务器入口的离线回归测试。"""
 import json
 import io
 from pathlib import Path
@@ -25,18 +25,18 @@ from chemistry_collector.policy import (
 
 
 ROOT = Path(__file__).resolve().parents[1]
-JOURNALS = ROOT / "config" / "journals_v6_3.json"
-POLICY = ROOT / "config" / "journal_policy_v6_3.json"
-DISCIPLINES = ROOT / "config" / "disciplines_v6_3.json"
+JOURNALS = ROOT / "config" / "journals_v6_4.json"
+POLICY = ROOT / "config" / "journal_policy_v6_4.json"
+DISCIPLINES = ROOT / "config" / "disciplines_v6_4.json"
 
 
 # 本测试类集中验证配置与采集规则的兼容性，避免依赖在线服务。
-class CollectorV63StructureAndPolicyTests(unittest.TestCase):
+class CollectorV64StructureAndPolicyTests(unittest.TestCase):
     def setUp(self):
         self.journals = collector.load_journals(JOURNALS)
         self.policies = load_journal_policies(POLICY)
 
-    def test_v63_keeps_42_traceable_journals_but_skips_three_low_yield(self):
+    def test_v64_keeps_42_traceable_journals_but_skips_three_low_yield(self):
         raw = json.loads(JOURNALS.read_text(encoding="utf-8"))
         self.assertIsInstance(raw, list)
         self.assertEqual(42, len(self.journals))
@@ -237,7 +237,7 @@ class CollectorV63StructureAndPolicyTests(unittest.TestCase):
                 with redirect_stdout(io.StringIO()):
                     collector.collect_papers(FakeClient(), args, root)
             report = json.loads(
-                (root / "journal_feasibility_v6_3.json").read_text(encoding="utf-8")
+                (root / "journal_feasibility_v6_4.json").read_text(encoding="utf-8")
             )
             row = report["journals"][0]
             self.assertEqual(1, row["download_attempts"])
@@ -267,8 +267,10 @@ class CollectorV63StructureAndPolicyTests(unittest.TestCase):
             for path in (ROOT / "crawl").glob("*.py")
         )
         self.assertNotIn("@qq.com", all_runners)
-        self.assertIn("journals_v6_3.json", runner)
-        self.assertIn("journal_policy_v6_3.json", runner)
+        self.assertIn("journals_v6_4.json", runner)
+        self.assertIn("journal_policy_v6_4.json", runner)
+        self.assertIn('"--continuous"', runner)
+        self.assertIn('"chemistry_dataset" / "papers"', runner)
 
 
 if __name__ == "__main__":

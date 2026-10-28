@@ -29,7 +29,7 @@ def main() -> None:
     parser.add_argument("--analysis-dir", type=Path,
                         default=ROOT / "chemistry_dataset" / "quantitative_analysis")
     parser.add_argument("--disciplines-file", type=Path,
-                        default=ROOT / "config" / "disciplines_v6_3.json")
+                        default=ROOT / "config" / "disciplines_v6_4.json")
     parser.add_argument("--inputs", type=Path, nargs="*",
                         help="source dataset folders; defaults to automatic discovery")
     parser.add_argument("--consolidate", action="store_true",
@@ -54,9 +54,11 @@ def main() -> None:
         parser.error("No paper dataset folders were found")
     entries, warnings = load_paper_entries(source_roots)
     unique, duplicate_count = deduplicate_entries(entries)
+    disciplines = load_disciplines(args.disciplines_file)
     if args.consolidate:
         records, consolidation = consolidate_entries(
-            unique, args.canonical_root, move_files=args.move_files
+            unique, args.canonical_root, move_files=args.move_files,
+            disciplines=disciplines,
         )
     else:
         records = []
@@ -73,12 +75,11 @@ def main() -> None:
             for entry in unique
         )}
 
-    records = classify_missing_disciplines(
-        records, load_disciplines(args.disciplines_file)
-    )
+    records = classify_missing_disciplines(records, disciplines)
     summary = write_quantitative_analysis(
         records, args.analysis_dir, source_roots=source_roots,
         duplicate_records=duplicate_count, warnings=warnings,
+        disciplines=disciplines,
     )
     removed = []
     if args.cleanup_sources:

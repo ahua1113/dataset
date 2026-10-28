@@ -1,24 +1,72 @@
 """按化学学科配额采集论文：调度期刊、尝试开放获取副本并持续更新统计。"""
+from dataclasses import replace
 from pathlib import Path
 
 import requests
 
 from .client import Client, SourceError
+from .analysis import (
+    PaperEntry,
+    classify_missing_disciplines,
+    deduplicate_entries,
+    write_quantitative_analysis,
+)
 from .discovery import journal_article_iterator, unpaywall_pdf_locations
 from .disciplines import (
     all_targets_met as discipline_targets_met,
     load_disciplines, merge_locations, quota_decision, quota_snapshot,
-    write_reports as write_v6_3_reports,
+    write_reports,
 )
 from .models import load_journals
 from .policy import apply_journal_policies, load_journal_policies, policy_for
 from .reports import select_journals
+from .runtime import free_disk_gib
 from .storage import download_file, identity_keys, load_existing_records, paper_audit
 from .utils import append_jsonl, log_error
 
+def _rolling_disciplines(records: list[dict], disciplines: list,
+                         step: int) -> tuple[list, int]:
+    """连续模式以最低学科数量为基准，逐轮提升全部学科目标。"""
+    base_target = max(discipline.target for discipline in disciplines)
+    snapshot = quota_snapshot(records, disciplines)
+    minimum_count = min(snapshot["counts"][discipline.id]
+                        for discipline in disciplines)
+    if minimum_count < base_target:
+        round_target = base_target
+    else:
+        round_target = ((minimum_count // step) + 1) * step
+        round_target = max(round_target, base_target)
+    return [replace(discipline, target=max(discipline.target, round_target))
+            for discipline in disciplines], round_target
+
+
+def _write_all_reports(root: Path, records: list[dict], disciplines: list,
+                       args, mode: str, duplicate_records: int = 0) -> dict:
+    """同步更新配额状态与统一量化长表。"""
+    report = write_reports(
+        root, records, disciplines, args.min_journals_per_discipline,
+        args.max_journal_share, args.max_review_share, mode,
+    )
+    analysis_dir = getattr(
+        args, "analysis_dir", root.parent / "quantitative_analysis"
+    )
+    downloaded_records = [
+        record for record in records if record.get("status") == "downloaded"
+    ]
+    write_quantitative_analysis(
+        downloaded_records, analysis_dir, source_roots=[root],
+        duplicate_records=duplicate_records,
+        warnings=[], disciplines=disciplines,
+        min_journals=args.min_journals_per_discipline,
+        max_journal_share=args.max_journal_share,
+        max_review_share=args.max_review_share,
+    )
+    return report
+
+
 # 以学科缺口为停止条件，期刊仅作为论文来源与溯源维度。
-def collect_papers_v6_3(client: Client, args, root: Path) -> None:
-    """按主学科配额采集论文；期刊仅是来源，不设置平均采集配额。"""
+def collect_papers_v6_4(client: Client, args, root: Path) -> dict:
+    """按主学科配额采集，并把历史论文纳入连续覆盖轮次。"""
     # 根据来源阶段和低收益策略筛选实际参与调度的期刊。
     all_journals = load_journals(args.journals_file)
     stage_journals = select_journals(all_journals, args.journal_stage)
@@ -34,24 +82,36 @@ def collect_papers_v6_3(client: Client, args, root: Path) -> None:
         raise ValueError("Journal runtime policy disabled every selected journal")
     disciplines = load_disciplines(args.disciplines_file)
     discipline_map = {discipline.id: discipline for discipline in disciplines}
-    allowed = {journal.name for journal in journals}
-    history = load_existing_records(root, category="papers")
-    quota_records = [
-        record for record in history
-        if record.get("journal") in allowed
-        and record.get("primary_discipline") in discipline_map
-    ]
-    ignored_legacy = sum(
-        record.get("journal") in allowed
-        and record.get("primary_discipline") not in discipline_map
-        for record in history
+    loaded_history = load_existing_records(root, category="papers")
+    history_entries = [PaperEntry(
+        record, root, root / Path(str(record.get("file") or ""))
+    ) for record in loaded_history]
+    unique_history, duplicate_records = deduplicate_entries(history_entries)
+    history = classify_missing_disciplines(
+        [entry.record for entry in unique_history], disciplines
     )
-    if ignored_legacy:
+    if duplicate_records:
         print(
-            f"[WARN] {ignored_legacy} legacy papers have no V6.3 primary discipline "
-            "and are not counted toward quotas.",
+            f"[V6.4] 历史 manifest 合并 {duplicate_records} 条重复记录；原文件不删除。",
             flush=True,
         )
+    for record in history:
+        record.setdefault("consolidation_file_status", "local_pdf_present")
+    reclassified = sum(
+        record.get("analysis_discipline_origin") == "reclassified_available_metadata"
+        for record in history
+    )
+    if reclassified:
+        print(
+            f"[V6.4] 已按现有元数据重新分类 {reclassified} 篇历史论文并计入统计。",
+            flush=True,
+        )
+    if getattr(args, "continuous", False):
+        disciplines, rolling_target = _rolling_disciplines(
+            history, disciplines, args.quota_step
+        )
+        discipline_map = {discipline.id: discipline for discipline in disciplines}
+        print(f"[V6.4] 连续采集轮次目标：每学科 {rolling_target} 篇", flush=True)
 
     seen_keys: set[str] = set()
     seen_sha: set[str] = set()
@@ -59,15 +119,14 @@ def collect_papers_v6_3(client: Client, args, root: Path) -> None:
         seen_keys.update(identity_keys(record))
         seen_sha.add(str(record.get("sha256") or "").lower())
 
-    # 先根据有效历史记录恢复学科配额，避免重复下载。
-    snapshot = quota_snapshot(quota_records, disciplines)
+    # 先根据全部有效历史记录恢复学科配额，避免重复下载。
+    snapshot = quota_snapshot(history, disciplines)
     mode = "metadata_preview" if args.dry_run or not args.download else "pdf_download"
-    write_v6_3_reports(
-        root, quota_records, disciplines, args.min_journals_per_discipline,
-        args.max_journal_share, args.max_review_share, mode,
+    report = _write_all_reports(
+        root, history, disciplines, args, mode, duplicate_records
     )
     print(
-        f"[V6.3] journals={len(journals)} stage={args.journal_stage}; "
+        f"[V6.4] journals={len(journals)} stage={args.journal_stage}; "
         f"disciplines={len(disciplines)}; counted={sum(snapshot['counts'].values())}",
         flush=True,
     )
@@ -75,12 +134,12 @@ def collect_papers_v6_3(client: Client, args, root: Path) -> None:
         snapshot, disciplines, args.min_journals_per_discipline,
         args.max_journal_share, args.max_review_share,
     ):
-        print("[V6.3] Every discipline quota already meets all constraints.", flush=True)
-        return
+        print("[V6.4] 当前学科轮次已满足全部约束。", flush=True)
+        return report
 
     errors = root / "errors.jsonl"
-    candidates_csv = root / "papers_v6_3_candidates.csv"
-    excluded_csv = root / "papers_v6_3_filtered_out.csv"
+    candidates_csv = root / "papers_v6_4_candidates.csv"
+    excluded_csv = root / "papers_v6_4_filtered_out.csv"
     states = [{
         "journal": journal,
         "iterator": iter(journal_article_iterator(
@@ -103,14 +162,21 @@ def collect_papers_v6_3(client: Client, args, root: Path) -> None:
     tried = 0
     previewed = 0
     successes = 0
+    stop_event = getattr(args, "stop_event", None)
+
+    def stop_requested() -> bool:
+        return bool(stop_event and stop_event.is_set())
 
     # 轮询各期刊，保证下载请求受全局次数和单刊预算双重限制。
-    while tried < args.max_attempts and not discipline_targets_met(
+    while (not stop_requested() and tried < args.max_attempts
+           and not discipline_targets_met(
         snapshot, disciplines, args.min_journals_per_discipline,
         args.max_journal_share, args.max_review_share,
-    ):
+    )):
         made_progress = False
         for state in states:
+            if stop_requested():
+                break
             if not state["active"]:
                 continue
             journal = state["journal"]
@@ -191,8 +257,8 @@ def collect_papers_v6_3(client: Client, args, root: Path) -> None:
                     "license_note": item["pdf_locations"][0].get("license"),
                     "license_verification": item["pdf_locations"][0].get("license_status"),
                 }
-                quota_records.append(preview)
-                snapshot = quota_snapshot(quota_records, disciplines)
+                history.append(preview)
+                snapshot = quota_snapshot(history, disciplines)
                 seen_keys.update(identity_keys(item))
                 previewed += 1
                 paper_audit(candidates_csv, preview, "eligible_not_downloaded")
@@ -207,6 +273,13 @@ def collect_papers_v6_3(client: Client, args, root: Path) -> None:
 
             downloaded = False
             last_error = "No OA fallback location succeeded"
+            minimum_free = float(getattr(args, "min_free_gb", 0) or 0)
+            available_gib = free_disk_gib(root)
+            if minimum_free and available_gib < minimum_free:
+                raise RuntimeError(
+                    f"可用磁盘仅 {available_gib:.2f} GiB，低于 "
+                    f"{minimum_free:.2f} GiB 安全阈值"
+                )
             # 同一论文最多尝试指定数量的合法公开全文地址。
             for location in item["pdf_locations"][:args.max_pdf_mirrors]:
                 if state["download_attempts"] >= state["max_download_attempts"]:
@@ -252,21 +325,24 @@ def collect_papers_v6_3(client: Client, args, root: Path) -> None:
                             excluded_csv, record_item, "duplicate_sha256",
                             "Identical PDF bytes already saved",
                         )
+                        seen_keys.update(identity_keys(item))
                         downloaded = True
                         break
                     assert record is not None
                     append_jsonl(root / "manifest.jsonl", record)
                     seen_keys.update(identity_keys(record))
                     seen_sha.add(record["sha256"])
-                    quota_records.append(record)
-                    snapshot = quota_snapshot(quota_records, disciplines)
+                    record["analysis_discipline_origin"] = "manifest"
+                    record["consolidation_file_status"] = "local_pdf_present"
+                    history.append(record)
+                    snapshot = quota_snapshot(history, disciplines)
                     successes += 1
                     state["downloaded"] += 1
-                    write_v6_3_reports(
-                        root, quota_records, disciplines,
-                        args.min_journals_per_discipline,
-                        args.max_journal_share, args.max_review_share, mode,
-                    )
+                    if successes % args.report_every == 0:
+                        report = _write_all_reports(
+                            root, history, disciplines, args, mode,
+                            duplicate_records,
+                        )
                     paper_audit(candidates_csv, record, "downloaded")
                     print(
                         f"[papers] {item['primary_discipline_name']} "
@@ -294,12 +370,11 @@ def collect_papers_v6_3(client: Client, args, root: Path) -> None:
         if not made_progress:
             break
 
-    report = write_v6_3_reports(
-        root, quota_records, disciplines, args.min_journals_per_discipline,
-        args.max_journal_share, args.max_review_share, mode,
+    report = _write_all_reports(
+        root, history, disciplines, args, mode, duplicate_records
     )
     print(
-        f"[V6.3] tried={tried} previewed={previewed} new_downloads={successes}; "
+        f"[V6.4] tried={tried} previewed={previewed} new_downloads={successes}; "
         f"disciplines_met={report['disciplines_meeting_target']}/{len(disciplines)}",
         flush=True,
     )
@@ -321,7 +396,10 @@ def collect_papers_v6_3(client: Client, args, root: Path) -> None:
     if not report["all_disciplines_meet_target"]:
         print(
             "[WARN] Some discipline quotas remain unmet. See "
-            "discipline_stats_v6_3.json; no count was fabricated.",
+            "discipline_stats_v6_4.json；程序保留真实缺口。",
             flush=True,
         )
+    report["new_downloads"] = successes
+    report["attempted_candidates"] = tried
+    return report
 

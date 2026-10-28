@@ -16,7 +16,7 @@ class SourceError(RuntimeError):
 
 # 请求客户端不处理登录认证；连续访问失败的域名会暂时停止下载请求。
 class Client:
-    """No login, session cookies, paywall workaround or other auth workflow."""
+    """仅访问公开资源，不处理登录、会话 Cookie 或付费墙绕过。"""
 
     def __init__(
         self,

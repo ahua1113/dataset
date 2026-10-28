@@ -1,6 +1,7 @@
 """通用辅助函数：标准化 DOI、标题、链接和时间，并输出结构化日志。"""
 from datetime import datetime, timezone
 import json
+import os
 from pathlib import Path
 import re
 from urllib.parse import urlparse
@@ -51,4 +52,6 @@ def append_jsonl(path: Path, item: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("a", encoding="utf-8") as out:
         out.write(json.dumps(item, ensure_ascii=False) + "\n")
+        out.flush()
+        os.fsync(out.fileno())
 

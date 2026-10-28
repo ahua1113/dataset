@@ -1,4 +1,4 @@
-"""V6.3 论文身份筛选与OA位置排序测试。"""
+"""V6.4 论文身份筛选与OA位置排序测试。"""
 from pathlib import Path
 import unittest
 
@@ -7,7 +7,7 @@ from chemistry_collector.models import load_journals
 
 
 ROOT = Path(__file__).resolve().parents[1]
-JOURNALS = ROOT / "config" / "journals_v6_3.json"
+JOURNALS = ROOT / "config" / "journals_v6_4.json"
 
 
 class DiscoveryTests(unittest.TestCase):
