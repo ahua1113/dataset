@@ -1,4 +1,4 @@
-"""按化学学科配额采集论文：调度期刊、尝试开放获取副本并持续更新统计。"""
+"""按学科配额或论文总量采集：调度期刊、下载开放全文并更新统计。"""
 from dataclasses import replace
 from pathlib import Path
 
@@ -23,6 +23,68 @@ from .reports import select_journals
 from .runtime import free_disk_gib
 from .storage import download_file, identity_keys, load_existing_records, paper_audit
 from .utils import append_jsonl, log_error
+
+
+def _active_total_target(args) -> int:
+    """Return the fixed or current incremental-cycle paper target."""
+    fixed_target = int(getattr(args, "max_total_papers", 0) or 0)
+    cycle_target = int(getattr(args, "cycle_total_target", 0) or 0)
+    return fixed_target or cycle_target
+
+
+def _prepare_cycle_target(args, current_total: int) -> int:
+    """Create one persistent +N target and retain it until the cycle is complete."""
+    papers_per_cycle = int(getattr(args, "papers_per_cycle", 0) or 0)
+    if papers_per_cycle and not getattr(args, "cycle_total_target", 0):
+        args.cycle_total_target = current_total + papers_per_cycle
+    return _active_total_target(args)
+
+
+def _collection_target_reached(records: list[dict], snapshot: dict,
+                               disciplines: list, args) -> bool:
+    """Use the cumulative valid-paper count when total-target mode is enabled."""
+    total_target = _active_total_target(args)
+    if total_target:
+        return len(records) >= total_target
+    return discipline_targets_met(
+        snapshot, disciplines, args.min_journals_per_discipline,
+        args.max_journal_share, args.max_review_share,
+    )
+
+
+def _candidate_decision(item: dict, snapshot: dict, discipline_map: dict,
+                        args) -> tuple[bool, str]:
+    """Total-target mode accepts classified and unclassified OA candidates."""
+    if _active_total_target(args):
+        return True, "total_target_eligible"
+    return quota_decision(
+        item, snapshot, discipline_map,
+        args.max_journal_share, args.max_review_share,
+        args.min_journals_per_discipline,
+    )
+
+
+def _annotate_collection_report(report: dict, records: list[dict], args) -> dict:
+    """Expose the active stopping rule to the continuous runner and operators."""
+    total_target = _active_total_target(args)
+    papers_per_cycle = int(getattr(args, "papers_per_cycle", 0) or 0)
+    report["collection_mode"] = (
+        "incremental_total_cycles" if papers_per_cycle
+        else "total_paper_target" if total_target
+        else "discipline_quotas"
+    )
+    report["total_papers"] = len(records)
+    report["max_total_papers"] = int(
+        getattr(args, "max_total_papers", 0) or 0
+    )
+    report["papers_per_cycle"] = papers_per_cycle
+    report["cycle_total_target"] = int(
+        getattr(args, "cycle_total_target", 0) or 0
+    )
+    report["total_target_reached"] = bool(
+        total_target and len(records) >= total_target
+    )
+    return report
 
 def _rolling_disciplines(records: list[dict], disciplines: list,
                          step: int) -> tuple[list, int]:
@@ -64,9 +126,9 @@ def _write_all_reports(root: Path, records: list[dict], disciplines: list,
     return report
 
 
-# 以学科缺口为停止条件，期刊仅作为论文来源与溯源维度。
+# 以累计总量或学科缺口为停止条件，期刊仅作为论文来源与溯源维度。
 def collect_papers_v6_4(client: Client, args, root: Path) -> dict:
-    """按主学科配额采集，并把历史论文纳入连续覆盖轮次。"""
+    """按总量或主学科配额采集，并把有效历史论文计入累计目标。"""
     # 根据来源阶段和低收益策略筛选实际参与调度的期刊。
     all_journals = load_journals(args.journals_file)
     stage_journals = select_journals(all_journals, args.journal_stage)
@@ -106,12 +168,25 @@ def collect_papers_v6_4(client: Client, args, root: Path) -> dict:
             f"[V6.4] 已按现有元数据重新分类 {reclassified} 篇历史论文并计入统计。",
             flush=True,
         )
-    if getattr(args, "continuous", False):
+    total_target = _prepare_cycle_target(args, len(history))
+    if getattr(args, "continuous", False) and not total_target:
         disciplines, rolling_target = _rolling_disciplines(
             history, disciplines, args.quota_step
         )
         discipline_map = {discipline.id: discipline for discipline in disciplines}
         print(f"[V6.4] 连续采集轮次目标：每学科 {rolling_target} 篇", flush=True)
+    elif total_target:
+        if getattr(args, "papers_per_cycle", 0):
+            target_label = (
+                f"本轮新增 {args.papers_per_cycle} 篇，累计目标 {total_target} 篇"
+            )
+        else:
+            target_label = f"有效论文达到 {total_target} 篇后停止"
+        print(
+            f"[V6.4] 总量优先模式：{target_label}；"
+            "学科分类仅用于统计。",
+            flush=True,
+        )
 
     seen_keys: set[str] = set()
     seen_sha: set[str] = set()
@@ -127,15 +202,20 @@ def collect_papers_v6_4(client: Client, args, root: Path) -> dict:
     )
     print(
         f"[V6.4] journals={len(journals)} stage={args.journal_stage}; "
-        f"disciplines={len(disciplines)}; counted={sum(snapshot['counts'].values())}",
+        f"disciplines={len(disciplines)}; counted={sum(snapshot['counts'].values())}; "
+        f"total={len(history)}",
         flush=True,
     )
-    if discipline_targets_met(
-        snapshot, disciplines, args.min_journals_per_discipline,
-        args.max_journal_share, args.max_review_share,
-    ):
-        print("[V6.4] 当前学科轮次已满足全部约束。", flush=True)
-        return report
+    if _collection_target_reached(history, snapshot, disciplines, args):
+        if total_target:
+            print(
+                f"[V6.4] 当前有效论文总量 {len(history)} 已达到目标 "
+                f"{total_target}。",
+                flush=True,
+            )
+        else:
+            print("[V6.4] 当前学科轮次已满足全部约束。", flush=True)
+        return _annotate_collection_report(report, history, args)
 
     errors = root / "errors.jsonl"
     candidates_csv = root / "papers_v6_4_candidates.csv"
@@ -169,13 +249,14 @@ def collect_papers_v6_4(client: Client, args, root: Path) -> dict:
 
     # 轮询各期刊，保证下载请求受全局次数和单刊预算双重限制。
     while (not stop_requested() and tried < args.max_attempts
-           and not discipline_targets_met(
-        snapshot, disciplines, args.min_journals_per_discipline,
-        args.max_journal_share, args.max_review_share,
-    )):
+           and not _collection_target_reached(
+               history, snapshot, disciplines, args
+           )):
         made_progress = False
         for state in states:
-            if stop_requested():
+            if stop_requested() or _collection_target_reached(
+                history, snapshot, disciplines, args
+            ):
                 break
             if not state["active"]:
                 continue
@@ -211,10 +292,8 @@ def collect_papers_v6_4(client: Client, args, root: Path) -> dict:
             if matching:
                 paper_audit(excluded_csv, item, "duplicate_metadata", sorted(matching)[0])
                 continue
-            eligible, reason = quota_decision(
-                item, snapshot, discipline_map,
-                args.max_journal_share, args.max_review_share,
-                args.min_journals_per_discipline,
+            eligible, reason = _candidate_decision(
+                item, snapshot, discipline_map, args
             )
             if not eligible:
                 paper_audit(excluded_csv, item, "discipline_quota_rejected", reason)
@@ -262,10 +341,16 @@ def collect_papers_v6_4(client: Client, args, root: Path) -> dict:
                 seen_keys.update(identity_keys(item))
                 previewed += 1
                 paper_audit(candidates_csv, preview, "eligible_not_downloaded")
+                if total_target:
+                    progress = f"total={len(history)}/{total_target}"
+                else:
+                    discipline_id = item["primary_discipline"]
+                    progress = (
+                        f"{snapshot['counts'][discipline_id]}/"
+                        f"{discipline_map[discipline_id].target}"
+                    )
                 print(
-                    f"[PREVIEW] {item['primary_discipline_name']} "
-                    f"{snapshot['counts'][item['primary_discipline']]}/"
-                    f"{discipline_map[item['primary_discipline']].target} | "
+                    f"[PREVIEW] {item['primary_discipline_name']} {progress} | "
                     f"{journal.name} | {item['title'][:70]}",
                     flush=True,
                 )
@@ -344,10 +429,16 @@ def collect_papers_v6_4(client: Client, args, root: Path) -> dict:
                             duplicate_records,
                         )
                     paper_audit(candidates_csv, record, "downloaded")
+                    if total_target:
+                        progress = f"total={len(history)}/{total_target}"
+                    else:
+                        discipline_id = item["primary_discipline"]
+                        progress = (
+                            f"{snapshot['counts'][discipline_id]}/"
+                            f"{discipline_map[discipline_id].target}"
+                        )
                     print(
-                        f"[papers] {item['primary_discipline_name']} "
-                        f"{snapshot['counts'][item['primary_discipline']]}/"
-                        f"{discipline_map[item['primary_discipline']].target} | "
+                        f"[papers] {item['primary_discipline_name']} {progress} | "
                         f"{journal.name} | source={location['source_type']} | "
                         f"{record['title'][:58]}",
                         flush=True,
@@ -370,11 +461,14 @@ def collect_papers_v6_4(client: Client, args, root: Path) -> dict:
         if not made_progress:
             break
 
+    # 每轮网络采集结束后统一重跑分类，再生成最终学科与量化统计。
+    history = classify_missing_disciplines(history, disciplines)
     report = _write_all_reports(
         root, history, disciplines, args, mode, duplicate_records
     )
     print(
         f"[V6.4] tried={tried} previewed={previewed} new_downloads={successes}; "
+        f"total={len(history)}; "
         f"disciplines_met={report['disciplines_meeting_target']}/{len(disciplines)}",
         flush=True,
     )
@@ -393,7 +487,7 @@ def collect_papers_v6_4(client: Client, args, root: Path) -> dict:
             f"target_met={row['target_met']}",
             flush=True,
         )
-    if not report["all_disciplines_meet_target"]:
+    if not total_target and not report["all_disciplines_meet_target"]:
         print(
             "[WARN] Some discipline quotas remain unmet. See "
             "discipline_stats_v6_4.json；程序保留真实缺口。",
@@ -401,5 +495,5 @@ def collect_papers_v6_4(client: Client, args, root: Path) -> dict:
         )
     report["new_downloads"] = successes
     report["attempted_candidates"] = tried
-    return report
+    return _annotate_collection_report(report, history, args)
 

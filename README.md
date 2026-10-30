@@ -86,6 +86,40 @@ python collector.py --categories papers --journal-stage all --download
 
 联系邮箱用于礼貌性 User-Agent 和 Unpaywall，不写入输出文件。一次性运行使用配置中的每学科 20 篇最低目标。
 
+### 按论文总量采集
+
+如果当前阶段优先扩大数据量，可以设置累计有效论文总量目标：
+
+```bash
+python collector.py --categories papers --journal-stage all --download \
+  --max-total-papers 1000 --max-attempts 6000 --per-page 100 \
+  --out chemistry_dataset/papers \
+  --analysis-dir chemistry_dataset/quantitative_analysis
+```
+
+启用 `--max-total-papers` 后，学科、单刊占比和综述占比只参与统计，
+不再拒绝候选论文。`unclassified` 论文允许下载并计入总量；DOI、OpenAlex ID、
+标题、下载地址和 PDF SHA-256 去重，以及期刊身份、OA来源和文件签名校验仍然生效。
+采集器按有效且去重后的历史记录计算累计总量，并在达到目标后停止。
+
+### 每小时新增固定数量并重新分类
+
+服务器可以持续执行“每轮新增100篇”的总量优先采集：
+
+```bash
+python collector.py --categories papers --journal-stage all --download \
+  --continuous --papers-per-cycle 100 --cycle-interval-seconds 3600 \
+  --max-cycles 0 --max-attempts 6000 --per-page 100 \
+  --out chemistry_dataset/papers \
+  --analysis-dir chemistry_dataset/quantitative_analysis
+```
+
+每轮以启动时的有效论文总量加100作为累计目标；如果当轮受网络或候选数量
+限制而未补足，下一次重试继续使用同一个目标。达到完整的100篇增量后，程序
+对全部有效论文重新执行分类，更新定量分析，再等待3600秒开启下一轮。分类结果
+不参与下载准入，`unclassified` 同样计入增量。`--max-cycles 0` 表示持续运行，
+直到收到停止信号或磁盘空间低于安全阈值。
+
 ## 服务器连续运行
 
 前台验证：
