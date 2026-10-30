@@ -25,15 +25,25 @@ from .storage import download_file, identity_keys, load_existing_records, paper_
 from .utils import append_jsonl, log_error
 
 
-def _max_total_papers(args) -> int:
-    """Return the cumulative paper target; zero keeps discipline-quota mode."""
-    return int(getattr(args, "max_total_papers", 0) or 0)
+def _active_total_target(args) -> int:
+    """Return the fixed or current incremental-cycle paper target."""
+    fixed_target = int(getattr(args, "max_total_papers", 0) or 0)
+    cycle_target = int(getattr(args, "cycle_total_target", 0) or 0)
+    return fixed_target or cycle_target
+
+
+def _prepare_cycle_target(args, current_total: int) -> int:
+    """Create one persistent +N target and retain it until the cycle is complete."""
+    papers_per_cycle = int(getattr(args, "papers_per_cycle", 0) or 0)
+    if papers_per_cycle and not getattr(args, "cycle_total_target", 0):
+        args.cycle_total_target = current_total + papers_per_cycle
+    return _active_total_target(args)
 
 
 def _collection_target_reached(records: list[dict], snapshot: dict,
                                disciplines: list, args) -> bool:
     """Use the cumulative valid-paper count when total-target mode is enabled."""
-    total_target = _max_total_papers(args)
+    total_target = _active_total_target(args)
     if total_target:
         return len(records) >= total_target
     return discipline_targets_met(
@@ -45,7 +55,7 @@ def _collection_target_reached(records: list[dict], snapshot: dict,
 def _candidate_decision(item: dict, snapshot: dict, discipline_map: dict,
                         args) -> tuple[bool, str]:
     """Total-target mode accepts classified and unclassified OA candidates."""
-    if _max_total_papers(args):
+    if _active_total_target(args):
         return True, "total_target_eligible"
     return quota_decision(
         item, snapshot, discipline_map,
@@ -56,12 +66,21 @@ def _candidate_decision(item: dict, snapshot: dict, discipline_map: dict,
 
 def _annotate_collection_report(report: dict, records: list[dict], args) -> dict:
     """Expose the active stopping rule to the continuous runner and operators."""
-    total_target = _max_total_papers(args)
+    total_target = _active_total_target(args)
+    papers_per_cycle = int(getattr(args, "papers_per_cycle", 0) or 0)
     report["collection_mode"] = (
-        "total_paper_target" if total_target else "discipline_quotas"
+        "incremental_total_cycles" if papers_per_cycle
+        else "total_paper_target" if total_target
+        else "discipline_quotas"
     )
     report["total_papers"] = len(records)
-    report["max_total_papers"] = total_target
+    report["max_total_papers"] = int(
+        getattr(args, "max_total_papers", 0) or 0
+    )
+    report["papers_per_cycle"] = papers_per_cycle
+    report["cycle_total_target"] = int(
+        getattr(args, "cycle_total_target", 0) or 0
+    )
     report["total_target_reached"] = bool(
         total_target and len(records) >= total_target
     )
@@ -149,7 +168,7 @@ def collect_papers_v6_4(client: Client, args, root: Path) -> dict:
             f"[V6.4] 已按现有元数据重新分类 {reclassified} 篇历史论文并计入统计。",
             flush=True,
         )
-    total_target = _max_total_papers(args)
+    total_target = _prepare_cycle_target(args, len(history))
     if getattr(args, "continuous", False) and not total_target:
         disciplines, rolling_target = _rolling_disciplines(
             history, disciplines, args.quota_step
@@ -157,8 +176,14 @@ def collect_papers_v6_4(client: Client, args, root: Path) -> dict:
         discipline_map = {discipline.id: discipline for discipline in disciplines}
         print(f"[V6.4] 连续采集轮次目标：每学科 {rolling_target} 篇", flush=True)
     elif total_target:
+        if getattr(args, "papers_per_cycle", 0):
+            target_label = (
+                f"本轮新增 {args.papers_per_cycle} 篇，累计目标 {total_target} 篇"
+            )
+        else:
+            target_label = f"有效论文达到 {total_target} 篇后停止"
         print(
-            f"[V6.4] 总量优先模式：有效论文达到 {total_target} 篇后停止；"
+            f"[V6.4] 总量优先模式：{target_label}；"
             "学科分类仅用于统计。",
             flush=True,
         )
@@ -436,6 +461,8 @@ def collect_papers_v6_4(client: Client, args, root: Path) -> dict:
         if not made_progress:
             break
 
+    # 每轮网络采集结束后统一重跑分类，再生成最终学科与量化统计。
+    history = classify_missing_disciplines(history, disciplines)
     report = _write_all_reports(
         root, history, disciplines, args, mode, duplicate_records
     )

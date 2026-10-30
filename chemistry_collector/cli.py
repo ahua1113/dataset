@@ -92,6 +92,11 @@ def main() -> None:
               "允许未分类论文，并在达到该总量后停止"),
     )
     parser.add_argument(
+        "--papers-per-cycle", type=int, default=0,
+        help=("连续模式每个完整轮次新增的有效论文数；本轮未补足时，"
+              "后续重试沿用原目标，达标后再等待下一轮"),
+    )
+    parser.add_argument(
         "--domain-failure-threshold",
         type=int,
         default=5,
@@ -128,9 +133,11 @@ def main() -> None:
         parser.error("Numeric limits must all be greater than zero")
     if args.cycle_interval_seconds < 60:
         parser.error("--cycle-interval-seconds must be at least 60")
-    if args.min_free_gb < 0 or args.max_cycles < 0 or args.max_total_papers < 0:
+    if (args.min_free_gb < 0 or args.max_cycles < 0
+            or args.max_total_papers < 0 or args.papers_per_cycle < 0):
         parser.error(
-            "--min-free-gb, --max-cycles and --max-total-papers cannot be negative"
+            "--min-free-gb, --max-cycles, --max-total-papers and "
+            "--papers-per-cycle cannot be negative"
         )
     if not (0 < args.max_journal_share <= 1):
         parser.error("--max-journal-share must be in (0, 1]")
@@ -152,6 +159,12 @@ def main() -> None:
     ):
         parser.error(
             "--max-total-papers requires normal papers collection mode"
+        )
+    if args.papers_per_cycle and not args.continuous:
+        parser.error("--papers-per-cycle requires --continuous")
+    if args.papers_per_cycle and args.max_total_papers:
+        parser.error(
+            "--papers-per-cycle and --max-total-papers are mutually exclusive"
         )
     args.out.mkdir(parents=True, exist_ok=True)
     # 在发起网络请求前校验期刊白名单，尽早暴露配置错误。
@@ -211,8 +224,14 @@ def main() -> None:
                 f"per_journal_target={args.per_journal_target}"
                 if category == "papers" and args.feasibility_only
                 else (
-                    f"max_total_papers={args.max_total_papers}"
-                    if category == "papers" and args.max_total_papers
+                    (
+                        f"papers_per_cycle={args.papers_per_cycle}"
+                        if args.papers_per_cycle
+                        else f"max_total_papers={args.max_total_papers}"
+                    )
+                    if category == "papers" and (
+                        args.max_total_papers or args.papers_per_cycle
+                    )
                     else ("discipline_quotas" if category == "papers"
                           else f"target={args.limit}")
                 )
@@ -248,6 +267,7 @@ def main() -> None:
     consecutive_failures = 0
     total_target_reached = False
     last_report: dict = {}
+    args.cycle_total_target = 0
     with RunLock(lock_path):
         write_runtime_state(state_path, status="starting", cycle=cycle)
         while not stop_event.is_set():
@@ -295,14 +315,24 @@ def main() -> None:
             else:
                 consecutive_failures = 0
                 delay = args.cycle_interval_seconds
-                total_target_reached = bool(report.get("total_target_reached"))
+                cycle_target_reached = bool(report.get("total_target_reached"))
+                total_target_reached = bool(
+                    args.max_total_papers and cycle_target_reached
+                )
+                if args.papers_per_cycle and cycle_target_reached:
+                    args.cycle_total_target = 0
                 write_runtime_state(
                     state_path,
-                    status=("target_reached" if total_target_reached else "sleeping"),
+                    status=(
+                        "target_reached" if total_target_reached else "sleeping"
+                    ),
                     cycle=cycle,
                     new_downloads=report.get("new_downloads", 0),
                     total_papers=report.get("total_papers", 0),
                     max_total_papers=report.get("max_total_papers", 0),
+                    papers_per_cycle=report.get("papers_per_cycle", 0),
+                    cycle_total_target=report.get("cycle_total_target", 0),
+                    cycle_target_reached=cycle_target_reached,
                     disciplines_meeting_target=report.get(
                         "disciplines_meeting_target", 0
                     ),
@@ -323,5 +353,7 @@ def main() -> None:
             ),
             total_papers=last_report.get("total_papers", 0),
             max_total_papers=last_report.get("max_total_papers", 0),
+            papers_per_cycle=last_report.get("papers_per_cycle", 0),
+            cycle_total_target=last_report.get("cycle_total_target", 0),
         )
 

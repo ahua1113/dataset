@@ -8,8 +8,10 @@ from unittest.mock import patch
 
 from chemistry_collector.disciplines import load_disciplines
 from chemistry_collector.papers import (
+    _active_total_target,
     _candidate_decision,
     _collection_target_reached,
+    _prepare_cycle_target,
     _rolling_disciplines,
     collect_papers_v6_4,
 )
@@ -21,6 +23,20 @@ DISCIPLINES = ROOT / "config" / "disciplines_v6_4.json"
 
 
 class RuntimeV64Tests(unittest.TestCase):
+    def test_incremental_cycle_target_is_retained_until_reached(self):
+        args = SimpleNamespace(
+            max_total_papers=0,
+            papers_per_cycle=100,
+            cycle_total_target=0,
+        )
+        self.assertEqual(652, _prepare_cycle_target(args, 552))
+        self.assertEqual(652, args.cycle_total_target)
+        self.assertEqual(652, _prepare_cycle_target(args, 612))
+        self.assertEqual(652, _active_total_target(args))
+
+        args.cycle_total_target = 0
+        self.assertEqual(752, _prepare_cycle_target(args, 652))
+
     def test_total_target_counts_unclassified_and_bypasses_discipline_quota(self):
         disciplines = load_disciplines(DISCIPLINES)
         args = SimpleNamespace(
