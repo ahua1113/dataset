@@ -1,22 +1,20 @@
 {
-  "generated_at": "2026-10-28T02:44:38.559064+00:00",
+  "generated_at": "2026-10-30T09:51:22.597718+00:00",
   "source_roots": [
     "papers"
   ],
-  "unique_papers": 517,
-  "duplicate_records_removed": 1,
+  "unique_papers": 584,
+  "duplicate_records_removed": 0,
   "version": "V6.4",
   "journal_count": 39,
   "discipline_count_including_unclassified": 14,
   "publication_date_min": "2013-01-01",
-  "publication_date_max": "2026-10-24",
-  "total_pdf_bytes_reported": 1721724968,
-  "mean_pdf_bytes": 3330222.38,
-  "median_pdf_bytes": 2443874,
-  "local_pdf_verified": 517,
+  "publication_date_max": "2026-10-28",
+  "total_pdf_bytes_reported": 1947337724,
+  "mean_pdf_bytes": 3334482.4,
+  "median_pdf_bytes": 2406719.5,
+  "local_pdf_verified": 584,
   "analysis_only_or_unverified": 0,
-  "warnings": [
-    "仍有 5 条孤立 PDF 记录无法从指定旧清单恢复元数据"
-  ],
+  "warnings": [],
   "quantitative_csv": "quantitative_report.csv"
 }
