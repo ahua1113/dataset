@@ -1,0 +1,6 @@
+﻿line_number,reason,file,title,journal,doi,expected_sha256,actual_sha256
+72,file_not_found,raw/papers/papers_db19f39a775b9ff8a517.pdf,,,,db19f39a775b9ff8a5173e9f027ed2858c112a54df096fa7a6bc978000a8b199,
+106,file_not_found,raw/papers/papers_9947e051bed65fd0f719.pdf,,,,9947e051bed65fd0f7195b531a1d4c4db5e6b6e07de151cbdf1d1c2d089c318e,
+113,file_not_found,raw/papers/papers_0e6655b27e5706b44d87.pdf,,,,0e6655b27e5706b44d8722b4c04ed048bd634e7d2f8e085d4763353d996dc411,
+303,file_not_found,raw/papers/papers_7d450ffe1e7d62e4612c.pdf,,,,7d450ffe1e7d62e4612ccc0952c5636fad572473c36f33a296443e717c359bcc,
+379,file_not_found,raw/papers/papers_838812acc959b4ae6869.pdf,,,,838812acc959b4ae6869645da63a894f36d943b5356abd09ae19740f7f7af325,
