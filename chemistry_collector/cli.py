@@ -87,6 +87,11 @@ def main() -> None:
     parser.add_argument("--per-page", type=int, default=50)
     parser.add_argument("--max-attempts", type=int, default=3000)
     parser.add_argument(
+        "--max-total-papers", type=int, default=0,
+        help=("累计有效论文总量目标；大于0时停用学科配额过滤，"
+              "允许未分类论文，并在达到该总量后停止"),
+    )
+    parser.add_argument(
         "--domain-failure-threshold",
         type=int,
         default=5,
@@ -123,8 +128,10 @@ def main() -> None:
         parser.error("Numeric limits must all be greater than zero")
     if args.cycle_interval_seconds < 60:
         parser.error("--cycle-interval-seconds must be at least 60")
-    if args.min_free_gb < 0 or args.max_cycles < 0:
-        parser.error("--min-free-gb and --max-cycles cannot be negative")
+    if args.min_free_gb < 0 or args.max_cycles < 0 or args.max_total_papers < 0:
+        parser.error(
+            "--min-free-gb, --max-cycles and --max-total-papers cannot be negative"
+        )
     if not (0 < args.max_journal_share <= 1):
         parser.error("--max-journal-share must be in (0, 1]")
     if not (0 <= args.max_review_share <= 1):
@@ -138,6 +145,13 @@ def main() -> None:
         parser.error(
             "--continuous requires only --categories papers and --download; "
             "it cannot be combined with preview, feasibility, audit or stats modes"
+        )
+    if args.max_total_papers and (
+        cats != ["papers"] or args.feasibility_only
+        or args.audit_only or args.stats_only
+    ):
+        parser.error(
+            "--max-total-papers requires normal papers collection mode"
         )
     args.out.mkdir(parents=True, exist_ok=True)
     # 在发起网络请求前校验期刊白名单，尽早暴露配置错误。
@@ -196,7 +210,12 @@ def main() -> None:
             target_label = (
                 f"per_journal_target={args.per_journal_target}"
                 if category == "papers" and args.feasibility_only
-                else ("discipline_quotas" if category == "papers" else f"target={args.limit}")
+                else (
+                    f"max_total_papers={args.max_total_papers}"
+                    if category == "papers" and args.max_total_papers
+                    else ("discipline_quotas" if category == "papers"
+                          else f"target={args.limit}")
+                )
             )
             print(f"\n=== V6.4 {category} {target_label} ===", flush=True)
             if category == "papers":
@@ -227,6 +246,8 @@ def main() -> None:
     lock_path = args.out / "collector_v6_4.lock"
     cycle = 0
     consecutive_failures = 0
+    total_target_reached = False
+    last_report: dict = {}
     with RunLock(lock_path):
         write_runtime_state(state_path, status="starting", cycle=cycle)
         while not stop_event.is_set():
@@ -254,6 +275,7 @@ def main() -> None:
             )
             try:
                 report = run_once() or {}
+                last_report = report
             except (SourceError, RuntimeError, OSError, ValueError) as exc:
                 consecutive_failures += 1
                 delay = min(
@@ -273,20 +295,33 @@ def main() -> None:
             else:
                 consecutive_failures = 0
                 delay = args.cycle_interval_seconds
+                total_target_reached = bool(report.get("total_target_reached"))
                 write_runtime_state(
-                    state_path, status="sleeping", cycle=cycle,
+                    state_path,
+                    status=("target_reached" if total_target_reached else "sleeping"),
+                    cycle=cycle,
                     new_downloads=report.get("new_downloads", 0),
+                    total_papers=report.get("total_papers", 0),
+                    max_total_papers=report.get("max_total_papers", 0),
                     disciplines_meeting_target=report.get(
                         "disciplines_meeting_target", 0
                     ),
                     discipline_count=report.get("discipline_count", 0),
-                    next_attempt_in_seconds=delay,
+                    next_attempt_in_seconds=(0 if total_target_reached else delay),
                 )
+            if total_target_reached:
+                break
             if args.max_cycles and cycle >= args.max_cycles:
                 break
             stop_event.wait(delay)
         write_runtime_state(
             state_path, status="stopped", cycle=cycle,
-            stop_reason=("signal" if stop_event.is_set() else "max_cycles"),
+            stop_reason=(
+                "signal" if stop_event.is_set()
+                else "max_total_papers" if total_target_reached
+                else "max_cycles"
+            ),
+            total_papers=last_report.get("total_papers", 0),
+            max_total_papers=last_report.get("max_total_papers", 0),
         )
 
