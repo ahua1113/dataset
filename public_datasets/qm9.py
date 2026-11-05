@@ -21,7 +21,7 @@ from public_datasets.common import (
 from public_datasets.http import HttpClient, download_with_resume
 
 
-QM9_ARCHIVE_URL = "https://figshare.com/ndownloader/files/3195389"
+QM9_ARCHIVE_URL = "https://ndownloader.figshare.com/files/3195389"
 
 
 def validate_tar_member(member: tarfile.TarInfo, destination: Path) -> None:

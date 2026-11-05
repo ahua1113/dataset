@@ -25,6 +25,8 @@ env/
 # =========================
 # chemistry_dataset/
 
+chemistry_dataset_backup_v6_4
+chemistry_papers_v6_4.tar
 # Local paper-level inventories may contain DOI, paths and hashes
 analysis/**/papers_inventory.csv
 
@@ -39,7 +41,8 @@ analysis/**/papers_inventory.csv
 *.zip
 *.7z
 *.rar
-
+*.xyz
+*.bz2
 # Temporary files
 *.tmp
 *.temp
