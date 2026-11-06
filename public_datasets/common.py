@@ -75,9 +75,17 @@ def atomic_write_json(path: Path, value: Any) -> None:
 def append_jsonl(path: Path, rows: Iterable[dict[str, Any]]) -> int:
     path.parent.mkdir(parents=True, exist_ok=True)
     count = 0
-    with path.open("a", encoding="utf-8", newline="\n") as handle:
+    with path.open("a+b") as handle:
+        needs_separator = False
+        if handle.seek(0, os.SEEK_END):
+            handle.seek(-1, os.SEEK_END)
+            needs_separator = handle.read(1) != b"\n"
         for row in rows:
-            handle.write(json_dumps(row) + "\n")
+            encoded_row = (json_dumps(row) + "\n").encode("utf-8")
+            if needs_separator:
+                handle.write(b"\n")
+                needs_separator = False
+            handle.write(encoded_row)
             count += 1
         handle.flush()
         os.fsync(handle.fileno())

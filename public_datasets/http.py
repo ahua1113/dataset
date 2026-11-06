@@ -1,10 +1,8 @@
-"""带节流、重试和断点下载能力的共享 HTTP 客户端。"""
+"""带节流和重试能力的共享 HTTP 客户端。"""
 
 from __future__ import annotations
 
 import logging
-import os
-from pathlib import Path
 import time
 
 try:
@@ -112,56 +110,3 @@ class HttpClient:
             time.sleep(delay)
 
         raise CollectorError(f"网络请求最终失败：{url}；{last_error}")
-
-
-def download_with_resume(
-    client: HttpClient,
-    url: str,
-    destination: Path,
-    *,
-    chunk_size: int = 1024 * 1024,
-) -> None:
-    destination.parent.mkdir(parents=True, exist_ok=True)
-    partial = destination.with_suffix(destination.suffix + ".part")
-    existing = partial.stat().st_size if partial.exists() else 0
-    headers = {"Range": f"bytes={existing}-"} if existing else None
-    response = client.get(url, headers=headers, stream=True, acceptable_status={200, 206})
-
-    append = existing > 0 and response.status_code == 206
-    if existing and not append:
-        logging.warning("下载端不接受断点续传，将从头下载：%s", destination.name)
-        existing = 0
-    mode = "ab" if append else "wb"
-    expected = response.headers.get("Content-Length")
-    expected_bytes = int(expected) + existing if expected and expected.isdigit() else None
-    downloaded = existing
-    last_report = time.monotonic()
-
-    with partial.open(mode) as handle:
-        for chunk in response.iter_content(chunk_size=chunk_size):
-            if stop_requested():
-                response.close()
-                raise CollectorError("采集任务已请求停止；断点文件已保留")
-            if not chunk:
-                continue
-            handle.write(chunk)
-            downloaded += len(chunk)
-            if time.monotonic() - last_report >= 10:
-                if expected_bytes:
-                    logging.info(
-                        "下载进度：%.1f%%（%.1f MiB）",
-                        downloaded * 100 / expected_bytes,
-                        downloaded / (1024**2),
-                    )
-                else:
-                    logging.info("已下载 %.1f MiB", downloaded / (1024**2))
-                last_report = time.monotonic()
-        handle.flush()
-        os.fsync(handle.fileno())
-    response.close()
-
-    if expected_bytes is not None and downloaded != expected_bytes:
-        raise CollectorError(
-            f"下载大小不完整：期望 {expected_bytes} 字节，实际 {downloaded} 字节"
-        )
-    os.replace(partial, destination)

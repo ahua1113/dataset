@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 from datetime import date
+import json
 import os
 from pathlib import Path
 import re
@@ -43,6 +44,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--end")
     parser.add_argument("--parameter-code", help="USGS五位参数代码，例如流量00060")
     parser.add_argument("--page-size", type=int, default=10000)
+    parser.add_argument(
+        "--audit-only", action="store_true",
+        help="仅离线检查已保存的 USGS 时间段并输出 JSON 报告",
+    )
     parser.add_argument(
         "--out", type=Path, default=Path("chemistry_dataset/sensor_timeseries")
     )
@@ -85,6 +90,14 @@ def run_usgs(args: argparse.Namespace, session) -> int:
     end = parse_day(args.end) if args.end else start
     if start > end:
         raise ValueError("起始日期不能晚于结束日期")
+    if args.audit_only:
+        station = usgs.normalize_station(args.site)
+        reports = [
+            usgs.audit_interval(station, first, last, args.out, args.parameter_code)
+            for first, last in usgs.annual_intervals(start, end)
+        ]
+        print(json.dumps({"partitions": reports}, ensure_ascii=False, indent=2))
+        return int(not all(report["passed"] for report in reports))
     station, intervals, count = usgs.collect(
         session,
         os.getenv("USGS_API_KEY", "").strip(),
@@ -104,6 +117,8 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     if not 1 <= args.page_size <= 10000:
         parser.error("--page-size 必须在1到10000之间")
+    if args.audit_only and args.source != "usgs":
+        parser.error("--audit-only 当前仅支持 USGS")
     try:
         with requests.Session() as session:
             if args.source == "neon":

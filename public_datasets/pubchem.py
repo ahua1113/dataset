@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import gzip
+from hashlib import sha256
 import json
 import logging
 import os
@@ -26,6 +27,7 @@ from public_datasets.http import HttpClient
 
 
 PUG_BASE = "https://pubchem.ncbi.nlm.nih.gov/rest/pug"
+SDF_CID_TAG = b"> <PUBCHEM_COMPOUND_CID>"
 PROPERTIES = (
     "MolecularFormula",
     "MolecularWeight",
@@ -75,13 +77,19 @@ def fetch_properties(
             raise CollectorError(f"PubChem 返回了无效 JSON：{url}") from exc
         finally:
             response.close()
-        records = payload.get("PropertyTable", {}).get("Properties", [])
+        table = payload.get("PropertyTable") if isinstance(payload, dict) else None
+        records = table.get("Properties") if isinstance(table, dict) else None
         if not isinstance(records, list):
             raise CollectorError("PubChem 属性响应缺少 PropertyTable.Properties")
-        found = {int(record["CID"]) for record in records if "CID" in record}
+        try:
+            found = {int(record["CID"]) for record in records}
+        except (KeyError, TypeError, ValueError) as exc:
+            raise CollectorError("PubChem 属性记录缺少有效 CID") from exc
+        if len(found) != len(records) or not found.issubset(cids):
+            raise CollectorError("PubChem 属性响应包含重复或未请求的 CID")
         return records, [cid for cid in cids if cid not in found]
     except HttpRequestError as exc:
-        if exc.status_code not in {400, 404}:
+        if exc.status_code != 404:
             raise
         if len(cids) == 1:
             return [], [int(cids[0])]
@@ -112,17 +120,73 @@ def save_gzip_atomic(path: Path, content: bytes) -> None:
     os.replace(temporary, path)
 
 
+def sdf_cids(lines: Iterable[bytes]) -> set[int]:
+    """Read the CID of every complete record in a PubChem SDF."""
+    cids: set[int] = set()
+    cid = None
+    in_record = False
+    lines = iter(lines)
+    for raw_line in lines:
+        line = raw_line.strip()
+        if line == b"$$$$":
+            if cid is None or cid in cids:
+                raise CollectorError("PubChem SDF 记录缺少 CID 或 CID 重复")
+            cids.add(cid)
+            cid = None
+            in_record = False
+        elif line:
+            in_record = True
+            if line == SDF_CID_TAG:
+                if cid is not None:
+                    raise CollectorError("PubChem SDF 记录含有多个 CID 字段")
+                cid = int(next(lines, b"").strip())
+    if in_record or not cids:
+        raise CollectorError("PubChem SDF 没有完整记录")
+    return cids
+
+
+def load_sdf_cids(
+    manifest_path: Path, root: Path, requested: range, record_type: str
+) -> set[int]:
+    """Recover verified SDF coverage from both current and legacy manifests."""
+    covered: set[int] = set()
+    if not manifest_path.exists():
+        return covered
+    sdf_dir = (root / "pubchem" / "sdf").resolve()
+    with manifest_path.open("rb") as handle:
+        for line_number, line in enumerate(handle, start=1):
+            try:
+                batch = json.loads(line)
+                sdf = batch["sdf"]
+                if not sdf or sdf["record_type"] != record_type:
+                    continue
+                if (
+                    batch["requested_cid_end"] < requested.start
+                    or batch["requested_cid_start"] >= requested.stop
+                ):
+                    continue
+                # Existing manifests may use the path separator of another platform.
+                path = (root / sdf["path"].replace("\\", "/")).resolve()
+                if not path.is_relative_to(sdf_dir) or sha256_file(path) != sdf["sha256"]:
+                    raise CollectorError("PubChem SDF 路径或 SHA-256 与清单不一致")
+                with gzip.open(path, "rb") as records:
+                    covered.update(cid for cid in sdf_cids(records) if cid in requested)
+            except (OSError, EOFError, ValueError, KeyError, TypeError, CollectorError) as exc:
+                logging.warning("忽略 PubChem SDF 清单第 %s 行：%s", line_number, exc)
+    return covered
+
+
 def load_recorded_cids(path: Path) -> set[int]:
     result: set[int] = set()
     if not path.exists():
         return result
-    with path.open("r", encoding="utf-8") as handle:
+    with path.open("rb") as handle:
         for line_number, line in enumerate(handle, start=1):
             if not line.strip():
                 continue
             try:
                 result.add(int(json.loads(line)["CID"]))
-            except (json.JSONDecodeError, KeyError, TypeError, ValueError):
+            except (KeyError, TypeError, ValueError):
                 logging.warning("忽略 records.jsonl 第 %s 行的无效记录", line_number)
     return result
 
@@ -131,15 +195,19 @@ def load_known_missing_cids(path: Path) -> set[int]:
     result: set[int] = set()
     if not path.exists():
         return result
-    with path.open("r", encoding="utf-8") as handle:
+    with path.open("rb") as handle:
         for line in handle:
             if not line.strip():
                 continue
             try:
                 record = json.loads(line)
-                if record.get("error") == "CID not found" and "cid" in record:
+                if (
+                    isinstance(record, dict)
+                    and record.get("error") == "CID not found"
+                    and record.get("verified_missing") is True
+                ):
                     result.add(int(record["cid"]))
-            except (json.JSONDecodeError, TypeError, ValueError):
+            except (KeyError, TypeError, ValueError):
                 continue
     return result
 
@@ -156,9 +224,16 @@ def collect(args: argparse.Namespace, client: HttpClient, root: Path) -> dict[st
     requested = range(start_cid, end_cid + 1)
     existing = load_recorded_cids(records_path)
     known_missing = load_known_missing_cids(errors_path)
-    pending_count = sum(
-        1 for cid in requested if cid not in existing and cid not in known_missing
+    record_type = args.pubchem_record_type
+    stored_sdf = (
+        load_sdf_cids(batch_manifest_path, root, requested, record_type)
+        if args.pubchem_sdf else set()
     )
+
+    def needs_collection(cid: int) -> bool:
+        if cid in existing:
+            return args.pubchem_sdf and cid not in stored_sdf
+        return cid not in known_missing
 
     state = {
         "collector_version": VERSION,
@@ -170,7 +245,7 @@ def collect(args: argparse.Namespace, client: HttpClient, root: Path) -> dict[st
         "requested_cid_count": args.pubchem_count,
         "already_present_in_range": sum(1 for cid in requested if cid in existing),
         "known_missing_in_range": sum(1 for cid in requested if cid in known_missing),
-        "pending_cid_count": pending_count,
+        "pending_cid_count": sum(needs_collection(cid) for cid in requested),
         "download_sdf": args.pubchem_sdf,
         "record_type": args.pubchem_record_type,
         "updated_at": utc_now(),
@@ -179,11 +254,10 @@ def collect(args: argparse.Namespace, client: HttpClient, root: Path) -> dict[st
     require_free_disk(root, args.min_free_gb)
 
     collected = 0
+    collected_sdf = 0
     missing_total = 0
     failed_batches = 0
-    pending_cids = (
-        cid for cid in requested if cid not in existing and cid not in known_missing
-    )
+    pending_cids = (cid for cid in requested if needs_collection(cid))
     for batch_index, batch in enumerate(
         chunks(pending_cids, args.pubchem_batch_size), start=1
     ):
@@ -198,7 +272,9 @@ def collect(args: argparse.Namespace, client: HttpClient, root: Path) -> dict[st
             len(batch),
         )
         try:
-            properties, missing = fetch_properties(client, batch)
+            properties, missing = fetch_properties(
+                client, [cid for cid in batch if cid not in existing]
+            )
             retrieved_at = utc_now()
             normalized = []
             for record in properties:
@@ -209,27 +285,34 @@ def collect(args: argparse.Namespace, client: HttpClient, root: Path) -> dict[st
                 normalized.append(item)
 
             sdf_record: dict[str, Any] | None = None
-            valid_cids = sorted(int(item["CID"]) for item in normalized)
-            if args.pubchem_sdf and valid_cids:
-                sdf_path = sdf_dir / (
-                    f"cid_{batch[0]:09d}_{batch[-1]:09d}_{args.pubchem_record_type}.sdf.gz"
-                )
-                if not sdf_path.exists():
-                    save_gzip_atomic(
-                        sdf_path,
-                        fetch_sdf(client, valid_cids, args.pubchem_record_type),
-                    )
+            target_sdf_cids: list[int] = []
+            if args.pubchem_sdf:
+                new_cids = {int(item["CID"]) for item in normalized}
+                target_sdf_cids = [
+                    cid for cid in batch
+                    if (cid in existing or cid in new_cids) and cid not in stored_sdf
+                ]
+            if target_sdf_cids:
+                content = fetch_sdf(client, target_sdf_cids, record_type)
+                if sdf_cids(content.splitlines()) != set(target_sdf_cids):
+                    raise CollectorError("PubChem SDF 返回的 CID 与请求不一致")
+                stem = f"cid_{batch[0]:09d}_{batch[-1]:09d}"
+                sdf_path = sdf_dir / f"{stem}_{record_type}.sdf.gz"
+                if sdf_path.exists():
+                    digest = sha256(content).hexdigest()[:16]
+                    sdf_path = sdf_dir / f"{stem}_{digest}_{record_type}.sdf.gz"
+                save_gzip_atomic(sdf_path, content)
                 sdf_record = {
                     "path": str(sdf_path.relative_to(root)),
                     "bytes": sdf_path.stat().st_size,
                     "sha256": sha256_file(sdf_path),
-                    "record_type": args.pubchem_record_type,
+                    "record_type": record_type,
+                    "cids": target_sdf_cids,
                 }
 
             # SDF 成功后再提交属性，避免失败后 CID 被误判为已完成。
-            append_jsonl(records_path, normalized)
-            collected += len(normalized)
-            missing_total += len(missing)
+            if normalized or not records_path.exists():
+                append_jsonl(records_path, normalized)
             if missing:
                 append_jsonl(
                     errors_path,
@@ -238,6 +321,7 @@ def collect(args: argparse.Namespace, client: HttpClient, root: Path) -> dict[st
                             "dataset": "PubChem Compound",
                             "cid": cid,
                             "error": "CID not found",
+                            "verified_missing": True,
                             "recorded_at": retrieved_at,
                         }
                         for cid in missing
@@ -258,6 +342,10 @@ def collect(args: argparse.Namespace, client: HttpClient, root: Path) -> dict[st
                     }
                 ],
             )
+            collected += len(normalized)
+            missing_total += len(missing)
+            collected_sdf += len(target_sdf_cids)
+            stored_sdf.update(target_sdf_cids)
         except Exception as exc:
             failed_batches += 1
             append_jsonl(
@@ -279,6 +367,7 @@ def collect(args: argparse.Namespace, client: HttpClient, root: Path) -> dict[st
             {
                 "last_processed_cid": batch[-1],
                 "collected_in_run": collected,
+                "sdf_collected_in_run": collected_sdf,
                 "missing_in_run": missing_total,
                 "failed_batches": failed_batches,
                 "updated_at": utc_now(),
@@ -295,6 +384,8 @@ def collect(args: argparse.Namespace, client: HttpClient, root: Path) -> dict[st
         "requested_cid_count": args.pubchem_count,
         "records_in_range": sum(1 for cid in requested if cid in final_existing),
         "collected_in_run": collected,
+        "sdf_collected_in_run": collected_sdf,
+        "sdf_records_in_range": len(stored_sdf) if args.pubchem_sdf else None,
         "missing_in_run": missing_total,
         "failed_batches": failed_batches,
         "download_sdf": args.pubchem_sdf,

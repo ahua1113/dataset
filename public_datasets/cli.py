@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any, Sequence
 
 from public_datasets import VERSION
-from public_datasets import pubchem, qm9
+from public_datasets import pubchem
 from public_datasets.common import (
     CollectorLockError,
     atomic_write_json,
@@ -26,13 +26,13 @@ from public_datasets.http import HttpClient
 
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="独立采集 QM9 与 PubChem 公开化学数据，不影响论文 collector。"
+        description="独立采集 PubChem 公开化学数据。"
     )
     parser.add_argument(
         "--source",
-        choices=("qm9", "pubchem", "all"),
-        default="all",
-        help="采集来源；all 按 QM9、PubChem 顺序执行（默认：all）",
+        choices=("pubchem", "all"),
+        default="pubchem",
+        help="采集来源；all 为兼容旧命令的别名",
     )
     parser.add_argument(
         "--out",
@@ -49,16 +49,6 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--max-retries", type=int, default=5)
     parser.add_argument("--min-free-gb", type=float, default=5.0)
     parser.add_argument("--dry-run", action="store_true", help="只打印执行计划")
-
-    qm9_group = parser.add_argument_group("QM9")
-    qm9_group.add_argument("--qm9-url", default=qm9.QM9_ARCHIVE_URL)
-    qm9_group.add_argument(
-        "--qm9-extract",
-        action=argparse.BooleanOptionalAction,
-        default=True,
-        help="下载后解压 XYZ（默认开启，可用 --no-qm9-extract 关闭）",
-    )
-    qm9_group.add_argument("--qm9-force-download", action="store_true")
 
     pubchem_group = parser.add_argument_group("PubChem")
     pubchem_group.add_argument("--pubchem-start-cid", type=int, default=1)
@@ -110,16 +100,13 @@ def dry_run_plan(args: argparse.Namespace) -> dict[str, Any]:
         "out": str(args.out),
         "independent_from_paper_collector": True,
     }
-    if args.source in {"qm9", "all"}:
-        plan["qm9"] = {"url": args.qm9_url, "extract": args.qm9_extract}
-    if args.source in {"pubchem", "all"}:
-        plan["pubchem"] = {
-            "start_cid": args.pubchem_start_cid,
-            "end_cid": args.pubchem_start_cid + args.pubchem_count - 1,
-            "batch_size": args.pubchem_batch_size,
-            "download_sdf": args.pubchem_sdf,
-            "record_type": args.pubchem_record_type,
-        }
+    plan["pubchem"] = {
+        "start_cid": args.pubchem_start_cid,
+        "end_cid": args.pubchem_start_cid + args.pubchem_count - 1,
+        "batch_size": args.pubchem_batch_size,
+        "download_sdf": args.pubchem_sdf,
+        "record_type": args.pubchem_record_type,
+    }
     return plan
 
 
@@ -154,30 +141,23 @@ def main(argv: Sequence[str] | None = None) -> int:
                 contact_email=args.contact_email,
                 timeout_seconds=args.timeout_seconds,
                 max_retries=args.max_retries,
-                request_interval_seconds=(
-                    args.pubchem_request_interval
-                    if args.source in {"pubchem", "all"}
-                    else 0.0
-                ),
+                request_interval_seconds=args.pubchem_request_interval,
             )
             results: dict[str, Any] = {}
             try:
-                if args.source in {"qm9", "all"}:
-                    results["qm9"] = qm9.collect(args, client, root)
-                if args.source in {"pubchem", "all"} and not stop_requested():
+                if not stop_requested():
                     results["pubchem"] = pubchem.collect(args, client, root)
             finally:
                 client.close()
 
-            state.update(
-                {
-                    "status": "stopped" if stop_requested() else "completed",
-                    "results": results,
-                    "updated_at": utc_now(),
-                }
-            )
+            status, exit_code = "completed", 0
+            if stop_requested():
+                status, exit_code = "stopped", 130
+            elif results.get("pubchem", {}).get("failed_batches"):
+                status, exit_code = "completed_with_errors", 1
+            state.update(status=status, results=results, updated_at=utc_now())
             atomic_write_json(runtime_path, state)
-            return 130 if stop_requested() else 0
+            return exit_code
     except CollectorLockError as exc:
         logging.error("%s", exc)
         return 1

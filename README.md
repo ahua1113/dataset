@@ -1,8 +1,46 @@
-# 化学源数据采集 V6.4 — OA-only 全学科持续采集
+# 化学源数据采集 V7
 
-V6.4 是 V6 系列最终执行版。系统只采集无需登录即可合法访问的 OA 论文；期刊用于身份校验和溯源，13 个化学学科的覆盖情况决定调度顺序。
+V7 支持开放获取论文、PubChem Compound 和公开传感器时序采集。论文采集覆盖 13 个化学学科，使用期刊信息校验身份并记录来源。V7 是仓库发行版本，论文采集继续使用 V6.4 的配置和输出文件名。
 
-## 采集与计数规则
+## 安装
+
+使用 Python 3.11 或 3.12 安装依赖。
+
+```powershell
+python -m pip install -r requirements.txt
+```
+
+## PubChem Compound
+
+按 CID 范围采集分子式、分子量、SMILES、InChI、InChIKey 和分子描述符。属性写入 `pubchem/records.jsonl`，结构写入 `pubchem/sdf/` 下的压缩 SDF。批次清单记录结构类型、CID 和 SHA-256。
+
+```powershell
+python collect_public_datasets.py --pubchem-start-cid 1 --pubchem-count 100 --dry-run
+python collect_public_datasets.py --pubchem-start-cid 1 --pubchem-count 100
+```
+
+默认采集 2D 结构。使用 `--no-pubchem-sdf` 仅采集属性，或使用 `--pubchem-record-type 3d` 补采 PubChem 可提供的 3D 结构。对同一输出目录重跑时，按 CID 和结构类型复用已校验的文件。批次失败会记录在 `pubchem/errors.jsonl`，任务状态为 `completed_with_errors`，退出码为 1。默认输出根目录为 `chemistry_dataset/public_datasets/`，可用 `--out` 修改。
+
+## 传感器时序
+
+USGS Water Data 支持按站点、UTC 日期范围和参数代码下载连续观测，输出 JSONL 和分区清单。以下示例使用流量参数 `00060`。
+
+```powershell
+python collect_sensor_timeseries.py --source usgs --product continuous --site 01646500 --parameter-code 00060 --start 2024-01-01 --end 2024-01-02
+python collect_sensor_timeseries.py --source usgs --product continuous --site 01646500 --parameter-code 00060 --start 2024-01-01 --end 2024-01-02 --audit-only
+```
+
+`USGS_API_KEY` 可选。离线审计使用采集时相同的日期、站点、参数和输出目录，核对分区清单、SHA-256、观测时间和重复记录，并汇总缺失值、单位与质量标记。
+
+NEON 支持 `water-quality` 和 `groundwater`，按站点和月份保存原始 CSV 及清单。设置 `NEON_API_TOKEN`，再将示例中的 `ABCD` 替换为所需的四字母站点代码。
+
+```powershell
+python collect_sensor_timeseries.py --source neon --product water-quality --site ABCD --start 2024-01 --end 2024-02
+```
+
+传感器默认输出到 `chemistry_dataset/sensor_timeseries/`，可用 `--out` 修改。
+
+## 论文采集与计数规则
 
 - 已有论文与新论文统一存放在 `chemistry_dataset/papers/`，启动时全部重新计数；
 - 每篇论文只用一个主学科计入配额，次学科保留但不重复计数；
@@ -25,19 +63,18 @@ chemistry_dataset/
 │   ├── papers_v6_4_filtered_out.csv
 │   ├── discipline_stats_v6_4.json
 │   └── runtime_state_v6_4.json
-└── quantitative_analysis/
-    ├── quantitative_report.csv
-    ├── quantitative_summary.json
-    ├── papers_inventory.csv
-    └── README.md
+├── quantitative_analysis/
+│   ├── quantitative_report.csv
+│   ├── quantitative_summary.json
+│   ├── papers_inventory.csv
+│   └── README.md
+├── public_datasets/pubchem/
+└── sensor_timeseries/
 ```
 
 `quantitative_report.csv` 是唯一量化统计长表，统一包含：总量、期刊、主学科、发表年份与月份、出版社、OA 状态、PDF 来源、OA 版本、许可证、采集器版本、文章类型、文件大小、数据质量，以及“学科—期刊”和“学科—年份”交叉计数。`papers_inventory.csv` 是论文级明细，不属于聚合统计。
 
-当前仓库基线已按旧 manifest 的 SHA-256 恢复并重新去重：517 篇、39 本期刊，
-发表时间为 2013—2026 年。仍有 5 个 PDF 无法恢复论文身份；另有 103 篇虽有元数据，
-但现有可审计关键词不足，因此合计 108 篇保留为“未分类”，不强行计入学科配额。
-这些记录仍计入论文总量、文件状态和数据质量统计。
+论文数量与覆盖情况以最近生成的 [量化统计摘要](chemistry_dataset/quantitative_analysis/quantitative_summary.json) 为准。未分类论文计入总量、文件状态和数据质量统计。
 
 ## 首次迁移已有数据
 
@@ -75,10 +112,9 @@ python tools/consolidate_papers.py --consolidate --cleanup-sources --yes
 
 默认采用复制而不是移动，避免首次合并失败时丢失源文件。
 
-## 安装与一次性运行
+## 一次性采集论文
 
 ```powershell
-python -m pip install -r requirements.txt
 $env:OPENALEX_API_KEY="OpenAlex API Key"
 $env:COLLECTOR_CONTACT_EMAIL="联系邮箱"
 python collector.py --categories papers --journal-stage all --download

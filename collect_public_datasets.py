@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""QM9 / PubChem 公开数据集采集命令入口。"""
+"""PubChem 公开数据集采集命令入口。"""
 
 from public_datasets.cli import main
 
