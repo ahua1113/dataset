@@ -1,19 +1,19 @@
 {
-  "generated_at": "2026-10-30T09:51:22.597718+00:00",
+  "generated_at": "2026-11-05T17:54:30.600721+00:00",
   "source_roots": [
     "papers"
   ],
-  "unique_papers": 584,
+  "unique_papers": 2215,
   "duplicate_records_removed": 0,
   "version": "V6.4",
-  "journal_count": 39,
+  "journal_count": 42,
   "discipline_count_including_unclassified": 14,
   "publication_date_min": "2013-01-01",
-  "publication_date_max": "2026-10-28",
-  "total_pdf_bytes_reported": 1947337724,
-  "mean_pdf_bytes": 3334482.4,
-  "median_pdf_bytes": 2406719.5,
-  "local_pdf_verified": 584,
+  "publication_date_max": "2026-11-04",
+  "total_pdf_bytes_reported": 9505197041,
+  "mean_pdf_bytes": 4291285.35,
+  "median_pdf_bytes": 2744562,
+  "local_pdf_verified": 2215,
   "analysis_only_or_unverified": 0,
   "warnings": [],
   "quantitative_csv": "quantitative_report.csv"
