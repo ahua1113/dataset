@@ -145,6 +145,46 @@ def sdf_cids(lines: Iterable[bytes]) -> set[int]:
     return cids
 
 
+def fetch_sdf_batch(
+    client: HttpClient, cids: Sequence[int], record_type: str
+) -> tuple[bytes, list[int], list[int]]:
+    """Fetch structures and confirm omitted 3D CIDs individually."""
+    try:
+        content = fetch_sdf(client, cids, record_type)
+    except HttpRequestError as exc:
+        if record_type != "3d" or exc.status_code != 404:
+            raise
+        if len(cids) == 1:
+            return b"", [], list(cids)
+        content = b""
+        found: set[int] = set()
+    else:
+        found = sdf_cids(content.splitlines())
+        if found == set(cids):
+            return content, list(cids), []
+        if record_type != "3d" or not found.issubset(cids):
+            raise CollectorError("PubChem SDF 返回的 CID 与请求不一致")
+
+    parts = [content] if content else []
+    missing: list[int] = []
+    for cid in cids:
+        if cid in found:
+            continue
+        try:
+            record = fetch_sdf(client, [cid], record_type)
+        except HttpRequestError as exc:
+            if exc.status_code != 404:
+                raise
+            missing.append(cid)
+            continue
+        if sdf_cids(record.splitlines()) != {cid}:
+            raise CollectorError("PubChem SDF 返回的 CID 与请求不一致")
+        parts.append(record)
+        found.add(cid)
+    combined = b"".join(part.rstrip(b"\r\n") + b"\n" for part in parts)
+    return combined, [cid for cid in cids if cid in found], missing
+
+
 def load_sdf_cids(
     manifest_path: Path, root: Path, requested: range, record_type: str
 ) -> set[int]:
@@ -191,10 +231,11 @@ def load_recorded_cids(path: Path) -> set[int]:
     return result
 
 
-def load_known_missing_cids(path: Path) -> set[int]:
+def load_known_missing_cids(path: Path, record_type: str | None = None) -> set[int]:
     result: set[int] = set()
     if not path.exists():
         return result
+    error = "CID not found" if record_type is None else "SDF not found"
     with path.open("rb") as handle:
         for line in handle:
             if not line.strip():
@@ -203,7 +244,8 @@ def load_known_missing_cids(path: Path) -> set[int]:
                 record = json.loads(line)
                 if (
                     isinstance(record, dict)
-                    and record.get("error") == "CID not found"
+                    and record.get("error") == error
+                    and record.get("record_type") == record_type
                     and record.get("verified_missing") is True
                 ):
                     result.add(int(record["cid"]))
@@ -225,6 +267,10 @@ def collect(args: argparse.Namespace, client: HttpClient, root: Path) -> dict[st
     existing = load_recorded_cids(records_path)
     known_missing = load_known_missing_cids(errors_path)
     record_type = args.pubchem_record_type
+    known_missing_sdf = (
+        load_known_missing_cids(errors_path, record_type)
+        if args.pubchem_sdf and record_type == "3d" else set()
+    )
     stored_sdf = (
         load_sdf_cids(batch_manifest_path, root, requested, record_type)
         if args.pubchem_sdf else set()
@@ -232,7 +278,7 @@ def collect(args: argparse.Namespace, client: HttpClient, root: Path) -> dict[st
 
     def needs_collection(cid: int) -> bool:
         if cid in existing:
-            return args.pubchem_sdf and cid not in stored_sdf
+            return args.pubchem_sdf and cid not in stored_sdf and cid not in known_missing_sdf
         return cid not in known_missing
 
     state = {
@@ -255,6 +301,7 @@ def collect(args: argparse.Namespace, client: HttpClient, root: Path) -> dict[st
 
     collected = 0
     collected_sdf = 0
+    missing_sdf_total = 0
     missing_total = 0
     failed_batches = 0
     pending_cids = (cid for cid in requested if needs_collection(cid))
@@ -286,16 +333,19 @@ def collect(args: argparse.Namespace, client: HttpClient, root: Path) -> dict[st
 
             sdf_record: dict[str, Any] | None = None
             target_sdf_cids: list[int] = []
+            missing_sdf: list[int] = []
             if args.pubchem_sdf:
                 new_cids = {int(item["CID"]) for item in normalized}
                 target_sdf_cids = [
                     cid for cid in batch
                     if (cid in existing or cid in new_cids) and cid not in stored_sdf
+                    and cid not in known_missing_sdf
                 ]
             if target_sdf_cids:
-                content = fetch_sdf(client, target_sdf_cids, record_type)
-                if sdf_cids(content.splitlines()) != set(target_sdf_cids):
-                    raise CollectorError("PubChem SDF 返回的 CID 与请求不一致")
+                content, target_sdf_cids, missing_sdf = fetch_sdf_batch(
+                    client, target_sdf_cids, record_type
+                )
+            if target_sdf_cids:
                 stem = f"cid_{batch[0]:09d}_{batch[-1]:09d}"
                 sdf_path = sdf_dir / f"{stem}_{record_type}.sdf.gz"
                 if sdf_path.exists():
@@ -327,6 +377,21 @@ def collect(args: argparse.Namespace, client: HttpClient, root: Path) -> dict[st
                         for cid in missing
                     ),
                 )
+            if missing_sdf:
+                append_jsonl(
+                    errors_path,
+                    (
+                        {
+                            "dataset": "PubChem Compound",
+                            "cid": cid,
+                            "error": "SDF not found",
+                            "record_type": record_type,
+                            "verified_missing": True,
+                            "recorded_at": retrieved_at,
+                        }
+                        for cid in missing_sdf
+                    ),
+                )
             append_jsonl(
                 batch_manifest_path,
                 [
@@ -337,6 +402,7 @@ def collect(args: argparse.Namespace, client: HttpClient, root: Path) -> dict[st
                         "requested_count": len(batch),
                         "retrieved_count": len(normalized),
                         "missing_cids": missing,
+                        "sdf_missing_cids": missing_sdf,
                         "sdf": sdf_record,
                         "completed_at": utc_now(),
                     }
@@ -345,7 +411,9 @@ def collect(args: argparse.Namespace, client: HttpClient, root: Path) -> dict[st
             collected += len(normalized)
             missing_total += len(missing)
             collected_sdf += len(target_sdf_cids)
+            missing_sdf_total += len(missing_sdf)
             stored_sdf.update(target_sdf_cids)
+            known_missing_sdf.update(missing_sdf)
         except Exception as exc:
             failed_batches += 1
             append_jsonl(
@@ -368,6 +436,7 @@ def collect(args: argparse.Namespace, client: HttpClient, root: Path) -> dict[st
                 "last_processed_cid": batch[-1],
                 "collected_in_run": collected,
                 "sdf_collected_in_run": collected_sdf,
+                "sdf_missing_in_run": missing_sdf_total,
                 "missing_in_run": missing_total,
                 "failed_batches": failed_batches,
                 "updated_at": utc_now(),
@@ -386,6 +455,8 @@ def collect(args: argparse.Namespace, client: HttpClient, root: Path) -> dict[st
         "collected_in_run": collected,
         "sdf_collected_in_run": collected_sdf,
         "sdf_records_in_range": len(stored_sdf) if args.pubchem_sdf else None,
+        "sdf_missing_in_run": missing_sdf_total,
+        "sdf_known_missing_in_range": sum(cid in requested for cid in known_missing_sdf),
         "missing_in_run": missing_total,
         "failed_batches": failed_batches,
         "download_sdf": args.pubchem_sdf,

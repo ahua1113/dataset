@@ -13,7 +13,7 @@ from chemistry_collector.storage import (
 from chemistry_collector.utils import append_jsonl
 
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
 JOURNALS = ROOT / "config" / "journals_v6_4.json"
 
 

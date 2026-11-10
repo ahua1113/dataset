@@ -24,6 +24,7 @@ env/
 # Generated datasets and runtime reports
 # =========================
 # chemistry_dataset/
+/chemistry_dataset/collection_index/
 
 chemistry_dataset_backup_v6_4
 chemistry_papers_v6_4.tar

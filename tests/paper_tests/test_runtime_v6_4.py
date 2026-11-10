@@ -4,8 +4,9 @@ from pathlib import Path
 import tempfile
 from types import SimpleNamespace
 import unittest
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
+from chemistry_collector.client import SourceError
 from chemistry_collector.disciplines import load_disciplines
 from chemistry_collector.papers import (
     _active_total_target,
@@ -18,7 +19,7 @@ from chemistry_collector.papers import (
 from chemistry_collector.runtime import RunLock, write_runtime_state
 
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
 DISCIPLINES = ROOT / "config" / "disciplines_v6_4.json"
 
 
@@ -63,6 +64,8 @@ class RuntimeV64Tests(unittest.TestCase):
         self.assertEqual("total_target_eligible", reason)
 
     def test_total_target_stops_exactly_and_downloads_unclassified_papers(self):
+        requests_made = []
+
         def candidates(_client, journal, *_args, **_kwargs):
             for index in range(3):
                 yield {
@@ -73,12 +76,14 @@ class RuntimeV64Tests(unittest.TestCase):
                     "journal_issn": journal.issn,
                     "publisher": journal.publisher,
                     "doi": f"10.9999/total-{index}",
+                    "source_page": f"https://publisher.example/article/total-{index}",
+                    "publisher_oa_license": "CC-BY",
                     "openalex_id": f"W{index}",
                     "primary_discipline": "unclassified",
                     "primary_discipline_name": "未分类",
                     "secondary_disciplines": [],
                     "is_review": False,
-                    "pdf_locations": [{
+                    "pdf_locations": [] if index == 0 else [{
                         "url": f"https://repository.example/paper-{index}.pdf",
                         "version": "publishedVersion",
                         "oa_host": "repository.example",
@@ -91,7 +96,27 @@ class RuntimeV64Tests(unittest.TestCase):
                     }],
                 }
 
-        def fake_download(_client, item, root, **_kwargs):
+        def publisher_page(url, *, stream, url_allowed):
+            requests_made.append(url)
+            self.assertTrue(stream)
+            self.assertTrue(url_allowed(url))
+            self.assertFalse(url_allowed("https://publisher.example.invalid/"))
+            slug = url.rsplit("/", 1)[1]
+            response = MagicMock(url=url)
+            response.__enter__.return_value = response
+            response.iter_content.return_value = [(
+                f'<meta name="citation_doi" content="10.9999/{slug}">'
+                '<meta name="citation_pdf_url" content="https://untrusted.example/other.pdf">'
+                f'<meta name="citation_pdf_url" content="/pdf/{slug}.pdf">'
+            ).encode()]
+            return response
+
+        def fake_download(_client, item, root, **kwargs):
+            url = kwargs["url"]
+            requests_made.append(url)
+            if url.startswith("https://repository.example/"):
+                raise SourceError("mirror unavailable")
+            self.assertTrue(kwargs["url_allowed"](url))
             index = item["doi"].rsplit("-", 1)[1]
             relative = Path("raw") / "papers" / f"paper-{index}.pdf"
             path = root / relative
@@ -158,7 +183,7 @@ class RuntimeV64Tests(unittest.TestCase):
                 "chemistry_collector.papers.download_file",
                 side_effect=fake_download,
             ):
-                report = collect_papers_v6_4(object(), args, root)
+                report = collect_papers_v6_4(SimpleNamespace(get=publisher_page), args, root)
 
             manifest_rows = [
                 json.loads(line)
@@ -167,6 +192,17 @@ class RuntimeV64Tests(unittest.TestCase):
                 ).splitlines()
             ]
             self.assertEqual(2, len(manifest_rows))
+            self.assertEqual(
+                ["publisher_landing_page", "publisher_landing_page"],
+                [row["oa_metadata_provider"] for row in manifest_rows],
+            )
+            self.assertEqual([
+                "https://publisher.example/article/total-0",
+                "https://publisher.example/pdf/total-0.pdf",
+                "https://repository.example/paper-1.pdf",
+                "https://publisher.example/article/total-1",
+                "https://publisher.example/pdf/total-1.pdf",
+            ], requests_made)
             self.assertEqual(
                 {"unclassified"},
                 {row["primary_discipline"] for row in manifest_rows},

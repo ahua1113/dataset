@@ -6,7 +6,7 @@ from chemistry_collector.discovery import article_candidate, candidate_pdf_locat
 from chemistry_collector.models import load_journals
 
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
 JOURNALS = ROOT / "config" / "journals_v6_4.json"
 
 

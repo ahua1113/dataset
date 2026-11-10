@@ -16,7 +16,7 @@ from chemistry_collector.analysis import (
 from chemistry_collector.disciplines import load_disciplines
 
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
 DISCIPLINES = ROOT / "config" / "disciplines_v6_4.json"
 
 

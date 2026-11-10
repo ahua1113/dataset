@@ -1,5 +1,7 @@
 """按学科配额或论文总量采集：调度期刊、下载开放全文并更新统计。"""
+from collections import deque
 from dataclasses import replace
+from functools import partial
 from pathlib import Path
 
 import requests
@@ -19,6 +21,7 @@ from .disciplines import (
 )
 from .models import load_journals
 from .policy import apply_journal_policies, load_journal_policies, policy_for
+from .publisher_fallback import publisher_pdf_locations, publisher_url_allowed
 from .reports import select_journals
 from .runtime import free_disk_gib
 from .storage import download_file, identity_keys, load_existing_records, paper_audit
@@ -127,6 +130,18 @@ def _write_all_reports(root: Path, records: list[dict], disciplines: list,
 
 
 # 以累计总量或学科缺口为停止条件，期刊仅作为论文来源与溯源维度。
+def _fallback_entry(location: dict) -> dict:
+    return {
+        "rank": location.get("fallback_rank"),
+        "metadata_provider": location.get("metadata_provider"),
+        "source_type": location.get("source_type"),
+        "version": location.get("version"),
+        "host": location.get("oa_host"),
+        "license": location.get("license"),
+        "url": location.get("url"),
+    }
+
+
 def collect_papers_v6_4(client: Client, args, root: Path) -> dict:
     """按总量或主学科配额采集，并把有效历史论文计入累计目标。"""
     # 根据来源阶段和低收益策略筛选实际参与调度的期刊。
@@ -308,23 +323,21 @@ def collect_papers_v6_4(client: Client, args, root: Path) -> dict:
                         allow_preprints=args.allow_preprint_fallback,
                     ),
                 )
-            if not item.get("pdf_locations"):
+            locations = item.get("pdf_locations") or []
+            try_publisher = (
+                args.download and not args.dry_run
+                and item.get("publisher_oa_license") is not None
+            )
+            if not locations and not try_publisher:
                 paper_audit(
                     excluded_csv, item, "no_oa_pdf_after_fallback",
                     "OpenAlex and Unpaywall returned no acceptable HTTPS PDF",
                 )
                 continue
 
-            state["accepted"] += 1
-            fallback_chain = [{
-                "rank": location.get("fallback_rank"),
-                "metadata_provider": location.get("metadata_provider"),
-                "source_type": location.get("source_type"),
-                "version": location.get("version"),
-                "host": location.get("oa_host"),
-                "license": location.get("license"),
-                "url": location.get("url"),
-            } for location in item["pdf_locations"][:args.max_pdf_mirrors]]
+            state["accepted"] += bool(locations)
+            primary_locations = locations[:args.max_pdf_mirrors]
+            fallback_chain = [_fallback_entry(location) for location in primary_locations]
 
             if args.dry_run or not args.download:
                 preview = {
@@ -365,12 +378,36 @@ def collect_papers_v6_4(client: Client, args, root: Path) -> dict:
                     f"可用磁盘仅 {available_gib:.2f} GiB，低于 "
                     f"{minimum_free:.2f} GiB 安全阈值"
                 )
-            # 同一论文最多尝试指定数量的合法公开全文地址。
-            for location in item["pdf_locations"][:args.max_pdf_mirrors]:
+            pending = deque(primary_locations)
+            if try_publisher:
+                pending.append(None)
+            while pending:
                 if state["download_attempts"] >= state["max_download_attempts"]:
                     last_error = "journal download-attempt budget exhausted"
                     state["active"] = False
                     break
+                location = pending.popleft()
+                if location is None:
+                    try:
+                        advertised = publisher_pdf_locations(client, item, journal)
+                    except (SourceError, requests.RequestException, ValueError) as exc:
+                        last_error = str(exc)
+                        log_error(
+                            errors, "papers", last_error, journal=journal.name,
+                            doi=item["doi"], phase="publisher_landing_page",
+                        )
+                        continue
+                    existing_urls = {entry["url"] for entry in primary_locations}
+                    publisher_locations = [
+                        entry for entry in advertised if entry["url"] not in existing_urls
+                    ][:args.max_pdf_mirrors]
+                    if publisher_locations and not locations:
+                        state["accepted"] += 1
+                    for entry in publisher_locations:
+                        entry["fallback_rank"] = len(fallback_chain) + 1
+                        fallback_chain.append(_fallback_entry(entry))
+                    pending.extend(publisher_locations)
+                    continue
                 url = location["url"]
                 circuit_is_open = getattr(client, "is_circuit_open", lambda _url: False)
                 if circuit_is_open(url):
@@ -386,6 +423,12 @@ def collect_papers_v6_4(client: Client, args, root: Path) -> dict:
                         )
                     continue
                 state["download_attempts"] += 1
+                publisher_fallback = location["metadata_provider"] == "publisher_landing_page"
+                download_options = {}
+                if publisher_fallback:
+                    download_options["url_allowed"] = partial(
+                        publisher_url_allowed, domains=journal.publisher_hosts
+                    )
                 record_item = {
                     **item,
                     "oa_version": location["version"],
@@ -395,7 +438,11 @@ def collect_papers_v6_4(client: Client, args, root: Path) -> dict:
                     "oa_metadata_provider": location["metadata_provider"],
                     "source_fallback_rank": location["fallback_rank"],
                     "oa_fallback_chain": fallback_chain,
-                    "oa_verification_level": "issn_journal_identity+oa_resolver+file_signature",
+                    "oa_verification_level": (
+                        "issn_journal_identity+openalex_primary_oa+publisher_doi+file_signature"
+                        if publisher_fallback
+                        else "issn_journal_identity+oa_resolver+file_signature"
+                    ),
                     "license_note": location["license"],
                     "license_verification": location["license_status"],
                     "download_url": url,
@@ -404,6 +451,7 @@ def collect_papers_v6_4(client: Client, args, root: Path) -> dict:
                     status, record = download_file(
                         client, record_item, root, url=url, ext=".pdf",
                         max_file_mb=args.max_file_mb, seen_sha=seen_sha,
+                        **download_options,
                     )
                     if status == "sha_duplicate":
                         paper_audit(

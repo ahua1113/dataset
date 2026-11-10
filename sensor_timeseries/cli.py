@@ -1,4 +1,4 @@
-"""NEON 与 USGS Water Data 采集命令行。"""
+"""公开传感器时序数据采集命令行。"""
 
 from __future__ import annotations
 
@@ -12,7 +12,7 @@ import sys
 
 import requests
 
-from sensor_timeseries.sources import neon, usgs
+from sensor_timeseries.sources import neon, noaa, usgs
 
 
 def parse_month(value: str) -> date:
@@ -37,7 +37,7 @@ def next_month(value: date) -> date:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="公开传感器时序数据采集器")
-    parser.add_argument("--source", choices=("neon", "usgs"), default="neon")
+    parser.add_argument("--source", choices=("neon", "usgs", "noaa"), default="neon")
     parser.add_argument("--product", required=True)
     parser.add_argument("--site", required=True)
     parser.add_argument("--start", required=True)
@@ -123,6 +123,12 @@ def main(argv: list[str] | None = None) -> int:
         with requests.Session() as session:
             if args.source == "neon":
                 return run_neon(args, session)
+            if args.source == "noaa":
+                start = parse_day(args.start)
+                end = parse_day(args.end) if args.end else start
+                count = noaa.collect(session, args.product, args.site, start, end, args.out)
+                print(f"NOAA {args.site}: {count} 条水温观测")
+                return 0
             return run_usgs(args, session)
     except (ValueError, OSError, RuntimeError, requests.RequestException) as exc:
         parser.exit(1, f"采集失败：{exc}\n")

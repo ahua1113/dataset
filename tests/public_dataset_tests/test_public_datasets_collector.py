@@ -186,6 +186,31 @@ class PubChemTests(unittest.TestCase):
             self.assertEqual(summary["records_in_range"], 0)
             self.assertFalse((root / "pubchem" / "records.jsonl").exists())
 
+    def test_partial_3d_response_rechecks_omitted_cid(self) -> None:
+        self.args.pubchem_record_type = "3d"
+        sample = FakeClient().get(f"{pubchem.PUG_BASE}/compound/cid/1/record/SDF").content
+        for status_code in (404, 503):
+            with self.subTest(status_code=status_code), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                with patch.object(
+                    pubchem, "fetch_sdf",
+                    side_effect=[sample, HttpRequestError(status_code, "test", "https://example.org")],
+                ) as fetch:
+                    if status_code == 503:
+                        with self.assertLogs(level="ERROR"):
+                            summary = pubchem.collect(self.args, FakeClient(), root)
+                    else:
+                        summary = pubchem.collect(self.args, FakeClient(), root)
+                self.assertEqual([call.args[1] for call in fetch.call_args_list], [[1, 3], [3]])
+                self.assertEqual(summary["failed_batches"], int(status_code == 503))
+                self.assertEqual(summary["sdf_missing_in_run"], int(status_code == 404))
+                if status_code == 404:
+                    self.assertEqual(summary["records_in_range"], 2)
+                    self.assertEqual(summary["sdf_records_in_range"], 1)
+                    retry = FakeClient()
+                    self.assertEqual(pubchem.collect(self.args, retry, root)["sdf_known_missing_in_range"], 1)
+                    self.assertEqual(retry.urls, [])
+
     def test_refetches_sdf_with_a_checksum_mismatch(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

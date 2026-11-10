@@ -1,7 +1,7 @@
 """网络请求客户端：控制访问频率、遵守站点规则，并处理域名级访问熔断。"""
 import re
 import time
-from urllib.parse import urlparse
+from urllib.parse import urljoin, urlparse
 from urllib.robotparser import RobotFileParser
 
 import requests
@@ -90,7 +90,21 @@ class Client:
         return self.robot_parsers[origin].can_fetch(self.session.headers["User-Agent"], url)
 
     # 统一检查 HTTPS、站点限制、响应状态和登录跳转。
-    def get(self, url: str, *, api: bool = False, stream: bool = False):
+    def get(self, url: str, *, api: bool = False, stream: bool = False,
+            url_allowed=None):
+        if url_allowed is None:
+            return self._get_once(url, api=api, stream=stream, follow_redirects=True)
+        for _ in range(6):
+            if not url_allowed(url):
+                raise SourceError(f"URL outside publisher scope: {url}")
+            response = self._get_once(url, api=api, stream=stream, follow_redirects=False)
+            if not response.is_redirect:
+                return response
+            with response:
+                url = urljoin(response.url, response.headers["Location"])
+        raise SourceError("Publisher redirect limit exceeded")
+
+    def _get_once(self, url: str, *, api: bool, stream: bool, follow_redirects: bool):
         if not is_https(url):
             raise SourceError("Only HTTPS links are allowed")
         host = hostname(url)
@@ -108,7 +122,7 @@ class Client:
             if api and self.openalex_api_key and domain_matches(hostname(url), "openalex.org"):
                 headers["Authorization"] = f"Bearer {self.openalex_api_key}"
             response = self.session.get(url, timeout=(10, 40), stream=stream,
-                                        allow_redirects=True, headers=headers)
+                                        allow_redirects=follow_redirects, headers=headers)
         except requests.RequestException as exc:
             raise SourceError(str(exc)) from exc
         if not is_https(response.url):

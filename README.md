@@ -1,5 +1,7 @@
 # 化学源数据采集 V7
 
+项目目录、数据来源和本地索引刷新方法见 [项目与数据目录](DATA_LAYOUT.md)。
+
 V7 支持开放获取论文、PubChem Compound 和公开传感器时序采集。论文采集覆盖 13 个化学学科，使用期刊信息校验身份并记录来源。V7 是仓库发行版本，论文采集继续使用 V6.4 的配置和输出文件名。
 
 ## 安装
@@ -39,6 +41,12 @@ python collect_sensor_timeseries.py --source neon --product water-quality --site
 ```
 
 传感器默认输出到 `chemistry_dataset/sensor_timeseries/`，可用 `--out` 修改。
+
+NOAA CO-OPS 支持按站点和 UTC 日期采集连续水温。单次请求支持 1 至 30 天，结果保存为 NOAA 原始 JSON 字段与 SHA-256 清单。示例使用旧金山站 `9414290`。
+
+```powershell
+python collect_sensor_timeseries.py --source noaa --product water_temperature --site 9414290 --start 2024-01-03
+```
 
 ## 论文采集与计数规则
 
@@ -121,6 +129,8 @@ python collector.py --categories papers --journal-stage all --download
 ```
 
 联系邮箱用于礼貌性 User-Agent 和 Unpaywall，不写入输出文件。一次性运行使用配置中的每学科 20 篇最低目标。
+
+正式下载时，如果 OpenAlex 和 Unpaywall 没有可用的 PDF 地址，或优先地址均下载失败，采集器会在剩余期刊下载预算内查询出版社文章页。此兜底要求 OpenAlex 将论文的主发表位置标记为开放获取，且出版社页面的引用 DOI 与候选论文一致。采集器只尝试期刊配置允许的 HTTPS 域名上公开列出的 PDF，并将来源记录为 `publisher_landing_page`。出版社候选与原有镜像分别受 `--max-pdf-mirrors` 限制，共用期刊下载预算。预览模式不访问出版社页面。
 
 ### 按论文总量采集
 

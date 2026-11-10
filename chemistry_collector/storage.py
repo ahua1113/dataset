@@ -85,7 +85,8 @@ def file_signature_ok(first_bytes: bytes, ext: str) -> bool:
 
 # 使用临时文件流式下载，经过内容签名和 SHA-256 检查后再保存。
 def download_file(client: Client, item: dict, root: Path, *, url: str,
-                  ext: str, max_file_mb: int, seen_sha: set[str]) -> tuple[str, dict | None]:
+                  ext: str, max_file_mb: int, seen_sha: set[str],
+                  url_allowed=None) -> tuple[str, dict | None]:
     """先流式写入临时文件，验证文件签名与 SHA-256 后再原子重命名。
 
     返回下载状态及成功落盘的记录；重复文件不再保存。
@@ -102,7 +103,8 @@ def download_file(client: Client, item: dict, root: Path, *, url: str,
     sha = hashlib.sha256()
     first = bytearray()
     try:
-        with client.get(url, stream=True) as response:
+        request_options = {"url_allowed": url_allowed} if url_allowed is not None else {}
+        with client.get(url, stream=True, **request_options) as response:
             content_type = response.headers.get("Content-Type", "").split(";")[0].lower().strip()
             if content_type in {"text/html", "application/json", "text/plain", "application/xml"}:
                 raise SourceError(f"Not a PDF/media response: {content_type}")
